@@ -1,4 +1,5 @@
 secrets.yaml
+state.json
 __pycache__/
 *.pyc
 *.pyo

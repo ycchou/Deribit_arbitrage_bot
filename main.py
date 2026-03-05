@@ -4,6 +4,12 @@
 程式主入口。
 架構：事件驅動 — WebSocket 收到新 ticker 時立刻觸發套利掃描，
 不再依賴固定時間 sleep。
+
+Fix #1  交易執行加互斥鎖，避免兩個 thread 同時執行相同套利
+Fix #6  funding rate 從 perp ticker 更新到 dashboard
+Fix #8  下單失敗後進入短暫冷卻期（5 分鐘），避免連續重試
+Fix #9  執行前確認無活躍部位（硬性部位上限 = 1）
+Fix #10 重啟後從 state.json 恢復 last_trade_time
 """
 
 import time
@@ -21,6 +27,7 @@ from deribit_trader import DeribitTrader
 from position_manager import PositionManager
 from bot_state import bot_state, BotStateLogHandler
 from live_server import start_live_server
+from state_store import load as load_state, save as save_state
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +37,15 @@ class GlobalState:
         self.current_instruments: set = set()
         self.last_expiry_date: Optional[str] = None
         self.last_trade_time: float = 0
+        self.last_failure_time: float = 0          # Fix #8: 下單失敗時間
+
         # 節流：避免同一時間連發多次掃描
         self._scan_lock = threading.Lock()
         self._last_scan_time: float = 0
-        self.MIN_SCAN_INTERVAL = 0.05  # 最快 50ms 掃一次（避免 ticker flood）
+        self.MIN_SCAN_INTERVAL = 0.05              # 最快 50ms 掃一次
+
+        # Fix #1: 交易互斥鎖，確保同一時間只有一個 thread 能執行交易
+        self._trade_lock = threading.Lock()
 
     def should_scan(self) -> bool:
         """節流檢查：距上次掃描是否超過最小間隔"""
@@ -106,6 +118,7 @@ def perform_final_check_and_execute(
         'timestamp': opportunity['expiryTimestamp'],
     }
     funding_rate_8h = get_funding_rate(ws_client)
+    bot_state.update_funding_rate(funding_rate_8h)           # Fix #6
 
     final = calculate_strategy(
         strategy_type=updated['strategyType'], strategy_name=updated['strategyName'],
@@ -127,6 +140,7 @@ def perform_final_check_and_execute(
     result = trader.execute_arbitrage_strategy(final, required_amount)
     if result and result.get('success'):
         global_state.last_trade_time = time.time()
+        save_state('last_trade_time', global_state.last_trade_time)   # Fix #10
         send_trade_execution_notification(final)
         pos_manager.add_position(
             expiry_timestamp=final['expiryTimestamp'],
@@ -135,6 +149,8 @@ def perform_final_check_and_execute(
         bot_state.add_trade(final)
         return True
 
+    # Fix #8: 記錄下單失敗時間，進入短暫冷卻
+    global_state.last_failure_time = time.time()
     logger.error("❌ 交易執行失敗")
     return False
 
@@ -147,7 +163,7 @@ def run_scan(ws_client: DeribitWebSocket, trader: DeribitTrader,
         if not global_state.should_scan():
             return
 
-        # 冷卻期
+        # 28 小時交易冷卻期
         elapsed = time.time() - global_state.last_trade_time
         if elapsed < Config.COOLDOWN_PERIOD_SECONDS:
             remaining = (Config.COOLDOWN_PERIOD_SECONDS - elapsed) / 60
@@ -155,10 +171,21 @@ def run_scan(ws_client: DeribitWebSocket, trader: DeribitTrader,
             bot_state.update_scan_info({'status': 'cooling_down', 'cooldown_remaining_min': round(remaining, 1)})
             return
 
+        # Fix #8: 下單失敗短暫冷卻
+        failure_elapsed = time.time() - global_state.last_failure_time
+        if failure_elapsed < Config.FAILURE_COOLDOWN_SECONDS:
+            remaining_sec = Config.FAILURE_COOLDOWN_SECONDS - failure_elapsed
+            logger.info(f"⚠️ 失敗冷卻中，剩餘 {remaining_sec:.0f}s")
+            bot_state.update_scan_info({'status': 'cooling_down', 'cooldown_remaining_min': round(remaining_sec / 60, 2)})
+            return
+
         perp_ticker = ws_client.get_ticker('BTC-PERPETUAL')
         if not perp_ticker or not perp_ticker.get('last_price'):
             return
         bot_state.update_btc_price(perp_ticker['last_price'])
+        # Fix #6: 盡量從 ticker 即時拿取資金費率
+        if 'funding_8h' in perp_ticker:
+            bot_state.update_funding_rate(perp_ticker['funding_8h'])
 
         expiry_info = get_tomorrow_expiry()
         if not expiry_info:
@@ -212,7 +239,20 @@ def run_scan(ws_client: DeribitWebSocket, trader: DeribitTrader,
             'strategy_name': best['strategyName'],
             'last_scan_time': time.time(),
         })
-        perform_final_check_and_execute(best, ws_client, trader, pos_manager)
+
+        # Fix #1: 嘗試取得交易鎖（non-blocking）
+        if not global_state._trade_lock.acquire(blocking=False):
+            logger.info("⚡️ 其他執行緒正在交易中，跳過本次機會")
+            return
+        try:
+            # Fix #9: 鎖內雙重確認無活躍部位（硬性上限 = 1）
+            with pos_manager.lock:
+                if pos_manager.active_position:
+                    logger.info(f"⚠️ 已有活躍部位（{pos_manager.active_position.get('status')}），跳過執行")
+                    return
+            perform_final_check_and_execute(best, ws_client, trader, pos_manager)
+        finally:
+            global_state._trade_lock.release()
 
     except Exception as e:
         logger.error(f'❌ run_scan 發生錯誤: {e}', exc_info=True)
@@ -227,6 +267,16 @@ if __name__ == '__main__':
     logging.getLogger().addHandler(log_handler)
 
     logger.info('🤖 Deribit 套利機器人啟動')
+
+    # Fix #10: 從持久化狀態恢復 last_trade_time
+    saved = load_state()
+    if saved.get('last_trade_time'):
+        global_state.last_trade_time = saved['last_trade_time']
+        remaining_cooldown = (Config.COOLDOWN_PERIOD_SECONDS - (time.time() - global_state.last_trade_time)) / 60
+        if remaining_cooldown > 0:
+            logger.info(f"📁 讀取上次交易時間，冷卻剩餘 {remaining_cooldown:.1f} 分鐘")
+        else:
+            logger.info("📁 讀取上次交易時間，冷卻已結束")
 
     # Start live dashboard server in background
     start_live_server(bot_state)
@@ -269,7 +319,7 @@ if __name__ == '__main__':
         while True:
             time.sleep(Config.SCAN_INTERVAL_SECONDS)
             iteration += 1
-            # Update WS status on dashboard every iteration
+            # 更新 WS 狀態到 dashboard
             bot_state.update_ws_status(ws_client.is_connected, ws_client.is_authenticated)
             if ws_client.is_connected:
                 logger.debug(f'🔄 兜底掃描 #{iteration}')

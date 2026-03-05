@@ -66,6 +66,10 @@ class Config:
     SCAN_INTERVAL_SECONDS      = 1   # 主循環等待時間（秒），事件驅動後僅作兜底
     MIN_NET_PROFIT_OPPORTUNITY = 20  # 最低淨利潤門檻（美元）
 
+    # ── 風險控制 ─────────────────────────────────────────────────────────────────
+    MAX_CONCURRENT_POSITIONS = 1    # 最多同時持有 1 個部位（硬性限制）
+    FAILURE_COOLDOWN_SECONDS = 300  # 下單失敗後 5 分鐘冷卻，避免連續重試
+
     # ── Live Server ─────────────────────────────────────────────────────────────
     SERVER_HOST = _secrets.get("server", {}).get("host", "127.0.0.1")
     SERVER_PORT = int(_secrets.get("server", {}).get("port", 8080))

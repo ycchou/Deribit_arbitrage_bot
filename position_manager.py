@@ -4,6 +4,10 @@
 管理活躍的交易部位，自動平倉。
 訂單狀態透過 WebSocket user.orders.BTC-PERPETUAL.raw 即時接收，
 不再每秒輪詢 REST API。
+
+Fix #3  Taker 平倉前確認 Maker 單已取消，避免建立雙倉
+Fix #5  所有部位狀態變化均同步更新 bot_state
+Fix #10 部位狀態持久化至 state.json，重啟後自動恢復
 """
 
 import time
@@ -15,6 +19,7 @@ from config import Config
 from deribit_trader import DeribitTrader
 from deribit_ws_client import DeribitWebSocket
 from bot_state import bot_state
+from state_store import load as load_state, save as save_state
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +42,17 @@ class PositionManager:
         self.is_running = True
         # 訂閱 BTC-PERPETUAL 的訂單狀態
         self.ws.subscribe_user_orders('BTC-PERPETUAL', self._on_order_update)
+
+        # Fix #10: 讀取持久化部位
+        saved = load_state()
+        saved_pos = saved.get('active_position')
+        if saved_pos:
+            logger.warning(f"📁 發現持久化部位，載入監控: {saved_pos.get('status')} "
+                           f"到期={time.ctime(saved_pos['expiry_timestamp'] / 1000)}")
+            with self.lock:
+                self.active_position = saved_pos
+            bot_state.update_active_position(saved_pos)
+
         self._thread.start()
         logger.info('✅ 部位管理器已啟動')
 
@@ -47,21 +63,18 @@ class PositionManager:
         logger.info('🛑 部位管理器已停止')
 
     def add_position(self, expiry_timestamp: int, amount: float) -> None:
-        with self.lock:
-            self.active_position = {
-                'instrument': 'BTC-PERPETUAL',
-                'amount': amount,
-                'expiry_timestamp': expiry_timestamp,
-                'status': 'monitoring',
-                'maker_order_id': None,
-            }
-        self._maker_order_filled.clear()
-        bot_state.update_active_position({
+        pos = {
             'instrument': 'BTC-PERPETUAL',
             'amount': amount,
             'expiry_timestamp': expiry_timestamp,
             'status': 'monitoring',
-        })
+            'maker_order_id': None,
+        }
+        with self.lock:
+            self.active_position = pos.copy()
+        self._maker_order_filled.clear()
+        bot_state.update_active_position(pos)         # Fix #5
+        save_state('active_position', pos)            # Fix #10
         logger.info(f"📈 新部位加入管理，到期: {time.ctime(expiry_timestamp / 1000)}")
 
     # ─── WebSocket 訂單更新 callback ──────────────────────────────────────────
@@ -103,10 +116,13 @@ class PositionManager:
         expiry_sec = position['expiry_timestamp'] / 1000
         time_to_expiry = expiry_sec - now
 
+        # 已過期未平倉
         if time_to_expiry <= 0 and position['status'] != 'closed':
             logger.warning(f"⚠️ 部位已過期但未完成平倉，狀態: {position['status']}")
             with self.lock:
-                self.active_position['status'] = 'closed'
+                self.active_position = None
+            bot_state.update_active_position(None)    # Fix #5
+            save_state('active_position', None)       # Fix #10
             return
 
         # 階段一：進入平倉窗口，掛 Maker 單
@@ -122,7 +138,8 @@ class PositionManager:
                 with self.lock:
                     self.active_position = None
                 self._maker_order_filled.clear()
-                bot_state.update_active_position(None)
+                bot_state.update_active_position(None)    # Fix #5
+                save_state('active_position', None)       # Fix #10
 
         # 階段三：強制 Taker 平倉
         elif (0 < time_to_expiry <= Config.TAKER_FORCE_CLOSE_SECONDS
@@ -140,7 +157,9 @@ class PositionManager:
         if not current_pos or current_pos.get('size', 0) == 0:
             logger.info("ℹ️ 部位已不存在，標記已關閉")
             with self.lock:
-                self.active_position['status'] = 'closed'
+                self.active_position = None
+            bot_state.update_active_position(None)        # Fix #5
+            save_state('active_position', None)           # Fix #10
             return
 
         price = (perp_ticker['best_ask_price'] if current_pos['size'] < 0
@@ -157,23 +176,37 @@ class PositionManager:
             order_id = result['order']['order_id']
             logger.info(f"✅ Maker 平倉單已掛出 order_id={order_id}")
             self._maker_order_filled.clear()
+            updated_pos = {**position, 'status': 'closing_maker', 'maker_order_id': order_id}
             with self.lock:
                 self.active_position['status'] = 'closing_maker'
                 self.active_position['maker_order_id'] = order_id
+            bot_state.update_active_position(updated_pos)    # Fix #5
+            save_state('active_position', updated_pos)       # Fix #10
         else:
             logger.error(f"❌ Maker 平倉單失敗: {result}")
 
     def _force_close_taker(self, position: Dict) -> None:
-        # 取消可能存在的 Maker 單
+        # Fix #3: 取消 Maker 單後確認已消失，再送 Taker，避免雙倉
         if position['status'] == 'closing_maker' and position.get('maker_order_id'):
-            self.trader.cancel(position['maker_order_id'])
-            time.sleep(0.2)  # 短暫等待取消確認
+            cancel_result = self.trader.cancel(position['maker_order_id'])
+            if not cancel_result:
+                logger.warning(f"⚠️ Maker 單取消指令無回應，查詢確認...")
+            time.sleep(0.5)  # 讓取消生效
+            open_orders = self.trader.get_open_orders_by_instrument(position['instrument'])
+            if any(o.get('order_id') == position['maker_order_id'] for o in open_orders):
+                logger.error(
+                    f"❌ Maker 單 {position['maker_order_id']} 仍在掛單中，"
+                    "中止 Taker 平倉以避免重複建倉"
+                )
+                return
 
         remaining_pos = self.trader.get_position(position['instrument'])
         if not remaining_pos or remaining_pos.get('size', 0) == 0:
             logger.info("ℹ️ Taker 平倉前部位已不存在")
             with self.lock:
                 self.active_position = None
+            bot_state.update_active_position(None)        # Fix #5
+            save_state('active_position', None)           # Fix #10
             return
 
         perp_ticker = self.ws.get_ticker('BTC-PERPETUAL')
@@ -193,4 +226,5 @@ class PositionManager:
 
         with self.lock:
             self.active_position = None
-        bot_state.update_active_position(None)
+        bot_state.update_active_position(None)            # Fix #5
+        save_state('active_position', None)               # Fix #10

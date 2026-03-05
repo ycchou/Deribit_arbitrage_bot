@@ -7,6 +7,11 @@
   - 公開頻道：訂閱 ticker（raw 每次更新）
   - 私有頻道：認證後下單、訂閱訂單狀態
   - 事件驅動：收到 ticker 更新時呼叫 on_ticker_update callback
+
+Fix #2  重連後重新訂閱所有頻道（subscribed_instruments 在每次連線前重置）
+Fix #4  斷線時將所有等待中的 RPC Future 標記為 ConnectionError，避免 thread 卡 8s
+Fix #6  _next_id 加鎖，避免高頻下單時 ID 碰撞
+Fix #7  pending_subscriptions 存取全面加鎖（_sub_lock）
 """
 
 import asyncio
@@ -36,8 +41,10 @@ class DeribitWebSocket:
         self.last_update_time: Dict[str, float] = {}
 
         # 訂閱管理
+        self._sub_lock = threading.Lock()                    # Fix #7: 保護以下兩個 set
         self.subscribed_instruments: set = set()
         self.pending_subscriptions: set = set()
+
         self.is_connected = False
         self.is_authenticated = False
         self.connection_ready = threading.Event()
@@ -52,6 +59,7 @@ class DeribitWebSocket:
         # 私有 API：等待中的 RPC 請求 {id: Future}
         self._pending_requests: Dict[int, Future] = {}
         self._pending_lock = threading.Lock()
+        self._id_lock = threading.Lock()                    # Fix #6: 保護 _request_id
         self._request_id = 0
 
     # ─── 公開介面 ──────────────────────────────────────────────────────────────
@@ -74,6 +82,7 @@ class DeribitWebSocket:
         self.is_running = False
         self.is_connected = False
         self.connection_ready.clear()
+        self._flush_pending_requests()
         if self.loop:
             self.loop.call_soon_threadsafe(self.loop.stop)
         if self.thread:
@@ -82,7 +91,8 @@ class DeribitWebSocket:
 
     def subscribe_instruments(self, instruments: List[str]) -> bool:
         """訂閱合約 ticker（smart，只訂閱新增的）"""
-        new_instruments = [i for i in instruments if i not in self.subscribed_instruments]
+        with self._sub_lock:                                 # Fix #7
+            new_instruments = [i for i in instruments if i not in self.subscribed_instruments]
         if not new_instruments:
             return True
 
@@ -96,13 +106,15 @@ class DeribitWebSocket:
             try:
                 result = future.result(timeout=5)
                 if result:
-                    self.subscribed_instruments.update(new_instruments)
+                    with self._sub_lock:                     # Fix #7
+                        self.subscribed_instruments.update(new_instruments)
                 return result
             except Exception as e:
                 logger.error(f'❌ 訂閱失敗: {e}')
                 return False
         else:
-            self.pending_subscriptions.update(channels)
+            with self._sub_lock:                             # Fix #7
+                self.pending_subscriptions.update(channels)
             return False
 
     def get_ticker(self, instrument_name: str) -> Optional[dict]:
@@ -187,7 +199,8 @@ class DeribitWebSocket:
                 self._subscribe_channels([channel]), self.loop
             )
         else:
-            self.pending_subscriptions.add(channel)
+            with self._sub_lock:                             # Fix #7
+                self.pending_subscriptions.add(channel)
 
     def get_statistics(self) -> dict:
         with self.data_lock:
@@ -216,6 +229,15 @@ class DeribitWebSocket:
                     time.sleep(Config.WS_RECONNECT_DELAY)
 
     async def _connect_and_run(self) -> None:
+        # ── Fix #2: 每次連線前，將已訂閱頻道移回 pending 以確保重連後重新訂閱 ──
+        with self._sub_lock:
+            for inst in self.subscribed_instruments:
+                self.pending_subscriptions.add(f'ticker.{inst}.raw')
+            self.subscribed_instruments.clear()
+            # 私有頻道：從 callback 登記表重建
+            for inst in getattr(self, '_user_order_callbacks', {}):
+                self.pending_subscriptions.add(f'user.orders.{inst}.raw')
+
         async with websockets.connect(
             Config.DERIBIT_WS_URL,
             ping_interval=20,
@@ -228,10 +250,19 @@ class DeribitWebSocket:
             # 1. 認證
             await self._authenticate()
 
-            # 2. 重訂閱待處理的頻道
-            if self.pending_subscriptions:
-                await self._subscribe_channels(list(self.pending_subscriptions))
-                self.pending_subscriptions.clear()
+            # 2. 重訂閱所有頻道（含重連後需要復原的）──────────────────────────
+            with self._sub_lock:
+                pending = list(self.pending_subscriptions)
+            if pending:
+                success = await self._subscribe_channels(pending)
+                if success:
+                    with self._sub_lock:
+                        for ch in pending:
+                            self.pending_subscriptions.discard(ch)
+                            # 更新 subscribed_instruments（ticker 頻道）
+                            if ch.startswith('ticker.') and ch.endswith('.raw'):
+                                inst = ch[len('ticker.'):-len('.raw')]
+                                self.subscribed_instruments.add(inst)
 
             self.connection_ready.set()
 
@@ -240,9 +271,11 @@ class DeribitWebSocket:
                 self._receive_messages(),
             )
 
+        # ── 斷線清理 ────────────────────────────────────────────────────────────
         self.is_connected = False
         self.is_authenticated = False
         self.connection_ready.clear()
+        self._flush_pending_requests()                       # Fix #4
         logger.warning('⚠️ WebSocket 連線已關閉')
 
     async def _authenticate(self) -> None:
@@ -258,8 +291,8 @@ class DeribitWebSocket:
             },
         }
         await self.ws.send(json.dumps(payload))
-        # 等待認證回應（最多 5 秒）
-        deadline = time.time() + 5
+        # 等待認證回應（最多 10 秒，增加容忍度）
+        deadline = time.time() + 10
         while not self.is_authenticated and time.time() < deadline:
             await asyncio.sleep(0.05)
         if self.is_authenticated:
@@ -352,12 +385,22 @@ class DeribitWebSocket:
     # ─── 內部工具 ──────────────────────────────────────────────────────────────
 
     def _next_id(self) -> int:
-        self._request_id += 1
-        return self._request_id
+        with self._id_lock:                                  # Fix #6
+            self._request_id += 1
+            return self._request_id
+
+    def _flush_pending_requests(self) -> None:
+        """Fix #4: 斷線時將所有等待中的 RPC Future 標記為失敗，避免 thread 卡 8s。"""
+        with self._pending_lock:
+            for fut in self._pending_requests.values():
+                if not fut.done():
+                    fut.set_exception(ConnectionError('WebSocket disconnected'))
+            self._pending_requests.clear()
 
     async def _subscribe_channels(self, channels: List[str]) -> bool:
         if not self.ws or not self.is_connected:
-            self.pending_subscriptions.update(channels)
+            with self._sub_lock:                             # Fix #7
+                self.pending_subscriptions.update(channels)
             return False
         try:
             # 公開頻道用 public/subscribe，私有用 private/subscribe
@@ -376,6 +419,11 @@ class DeribitWebSocket:
                     'method': 'private/subscribe',
                     'params': {'channels': private},
                 }))
+            elif private and not self.is_authenticated:
+                # 認證尚未完成，留待重試
+                with self._sub_lock:
+                    self.pending_subscriptions.update(private)
+                logger.warning('⚠️ 私有頻道訂閱延遲：等待認證')
             return True
         except Exception as e:
             logger.error(f'❌ 訂閱失敗: {e}')
