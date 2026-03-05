@@ -21,7 +21,7 @@ from utils import setup_logging
 from deribit_ws_client import DeribitWebSocket
 from deribit_api import get_tomorrow_expiry, get_target_strikes, get_funding_rate
 from strategy import check_arbitrage_opportunity, calculate_strategy
-from notifications import send_trade_execution_notification, send_liquidity_issue_notification
+from notifications import send_trade_execution_notification, send_liquidity_issue_notification, send_startup_notification
 from config import Config
 from deribit_trader import DeribitTrader
 from position_manager import PositionManager
@@ -304,6 +304,8 @@ if __name__ == '__main__':
         pos_manager.stop()
         exit(1)
     logger.info('✅ BTC-PERPETUAL 數據已就緒\n')
+
+    send_startup_notification()
 
     # ── 事件驅動：每次收到 BTC-PERPETUAL ticker 就觸發掃描 ──────────────────
     def on_ticker(instrument: str) -> None:

@@ -109,6 +109,25 @@ def send_trade_execution_notification(opportunity: Dict) -> bool:
     logger.info(f"發送交易執行成功通知 (履約價 ${opportunity['strike']})")
     return _send_message(message)
 
+def send_startup_notification() -> bool:
+    """發送機器人啟動通知"""
+    from datetime import datetime
+    env = "🧪 Testnet" if Config.USE_TESTNET else "🔴 Mainnet"
+    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
+    message = f"""
+🤖 *Deribit 套利機器人已啟動*
+
+• *環境*: {env}
+• *交易單位*: `{Config.TRADE_AMOUNT_BTC} BTC`
+• *最低利潤門檻*: `${Config.MIN_NET_PROFIT_OPPORTUNITY}`
+• *啟動時間*: {timestamp}
+
+✅ WebSocket 已連接並認證，開始監控市場。
+""".strip()
+    logger.info("發送啟動通知")
+    return _send_message(message)
+
+
 def send_liquidity_issue_notification(opportunity: Dict) -> bool:
     """發送因流動性不足而放棄交易的通知"""
     timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
