@@ -1,121 +1,84 @@
 # arbitrage_bot/deribit_trader.py
 
 """
-處理所有對 Deribit 私有 API 的請求（需授權）。
-包含交易執行、部位查詢、訂單管理等功能。
+處理所有交易執行邏輯。
+下單、平倉、查詢倉位全部走 WebSocket 私有 API（低延遲）。
 """
-import requests
-import time
-import hmac
-import hashlib
-import json
-import logging
-from typing import Dict, Optional, Any, List
-# 新增導入：用於併發請求
-from concurrent.futures import ThreadPoolExecutor
 
-from config import Config
+import logging
+from typing import Dict, Optional, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from deribit_ws_client import DeribitWebSocket
 
 logger = logging.getLogger(__name__)
 
+
 class DeribitTrader:
-    def __init__(self, client_id: str, client_secret: str):
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.base_url = Config.DERIBIT_BASE_URL
+    def __init__(self, ws_client: DeribitWebSocket):
+        self.ws = ws_client
 
-    def _send_private_request(self, method: str, params: Optional[Dict] = None) -> Dict:
-        """發送私有 API 請求的核心函式"""
-        params = params or {}
-        timestamp = int(time.time() * 1000)
-        nonce = str(timestamp)
-        
-        # 準備簽名
-        signature_data = f"{timestamp}\n{nonce}\n"
-        signature = hmac.new(
-            self.client_secret.encode(),
-            signature_data.encode(),
-            hashlib.sha256
-        ).hexdigest()
-
-        headers = {
-            'Authorization': f'deri-hmac-sha256 id={self.client_id},ts={timestamp},sig={signature},nonce={nonce}',
-            'Content-Type': 'application/json'
-        }
-        
-        url = f'{self.base_url}{method}'
-        
-        try:
-            response = requests.post(url, headers=headers, json={'params': params}, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-            if 'error' in data:
-                logger.error(f"❌ API 請求失敗 ({method}): {data['error']}")
-                return data
-            return data.get('result', {})
-        except requests.RequestException as e:
-            logger.error(f"❌ API 網路請求錯誤 ({method}): {e}")
-            return {'error': str(e)}
-        except Exception as e:
-            logger.error(f"❌ API 未知錯誤 ({method}): {e}")
-            return {'error': str(e)}
-
-    # --- 這是被替換和優化的函數 ---
     def execute_arbitrage_strategy(self, strategy: Dict, amount: float) -> Optional[Dict]:
-        """【併發優化版】同時發送一組套利訂單（Call, Put, Perpetual）"""
-        logger.info(f"🚀 準備併發執行策略: {strategy['strategyName']} @ ${strategy['strike']} for {amount} BTC")
-        
-        # 準備三筆訂單的請求參數
-        perp_direction = 'buy' if strategy['perpDirection'] == 'long' else 'sell'
-        
-        orders_to_place = [
-            { # 1. Call 選項
-                'method': f"/private/{strategy['callDirection']}",
-                'params': {'instrument_name': strategy['callInstrument'], 'amount': amount, 'type': 'limit', 'price': strategy['callPrice']}
-            },
-            { # 2. Put 選項
-                'method': f"/private/{strategy['putDirection']}",
-                'params': {'instrument_name': strategy['putInstrument'], 'amount': amount, 'type': 'limit', 'price': strategy['putPrice']}
-            },
-            { # 3. 永續合約
-                'method': f"/private/{perp_direction}",
-                'params': {'instrument_name': 'BTC-PERPETUAL', 'amount': amount, 'type': 'limit', 'price': strategy['perpOpenPrice']}
-            }
+        """
+        併發送出三條腿套利訂單（全部走 WebSocket 私有 API）。
+        任一條腿失敗時，自動撤銷已成功的訂單（補償邏輯）。
+        """
+        logger.info(f"🚀 執行策略: {strategy['strategyName']} @ ${strategy['strike']} ({amount} BTC)")
+
+        perp_dir = 'buy' if strategy['perpDirection'] == 'long' else 'sell'
+
+        legs = [
+            {'name': strategy['callInstrument'], 'direction': strategy['callDirection'],
+             'price': strategy['callPrice']},
+            {'name': strategy['putInstrument'],  'direction': strategy['putDirection'],
+             'price': strategy['putPrice']},
+            {'name': 'BTC-PERPETUAL',            'direction': perp_dir,
+             'price': strategy['perpOpenPrice']},
         ]
 
-        # 使用線程池併發發送所有請求
-        results = []
-        all_successful = True
-        
-        # 定義發送單個請求的包裝函數
-        def send_order(order):
-            return self._send_private_request(order['method'], order['params'])
+        # 併發送出三條腿
+        placed: List[Dict] = []   # 已成功的訂單 {instrument, order_id}
+        failed = False
 
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            # executor.map 會保持原始的順序返回結果
-            api_responses = list(executor.map(send_order, orders_to_place))
+        def place_leg(leg: dict):
+            result = self.ws.send_order(
+                direction=leg['direction'],
+                instrument=leg['name'],
+                amount=amount,
+                price=leg['price'],
+            )
+            return leg['name'], result
 
-        # 檢查所有請求的結果
-        for i, result in enumerate(api_responses):
-            instrument_name = orders_to_place[i]['params']['instrument_name']
-            if 'order' in result:
-                logger.info(f"  ✅ 併發下單成功: {result['order']['instrument_name']} ({result['order']['direction']})")
-                results.append(result)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {pool.submit(place_leg, leg): leg for leg in legs}
+            for fut in as_completed(futures):
+                instrument, result = fut.result()
+                if result and 'order' in result:
+                    order_id = result['order']['order_id']
+                    logger.info(f"  ✅ 下單成功: {instrument} → order_id={order_id}")
+                    placed.append({'instrument': instrument, 'order_id': order_id})
+                else:
+                    err = result.get('message') if result else '無回應'
+                    logger.error(f"  ❌ 下單失敗: {instrument} → {err}")
+                    failed = True
+
+        if not failed:
+            logger.info("✅✅✅ 三條腿全部下單成功")
+            return {'success': True, 'orders': placed}
+
+        # ── 補償：撤銷已成功的訂單 ────────────────────────────────────────────
+        logger.error("❌ 部分條腿失敗，執行補償撤單...")
+        for order in placed:
+            cancel_result = self.ws.cancel_order(order['order_id'])
+            if cancel_result:
+                logger.info(f"  🔄 已撤銷: {order['instrument']} order_id={order['order_id']}")
             else:
-                logger.error(f"  ❌ 併發下單失敗: {instrument_name}. 原因: {result.get('error') or '未知錯誤'}")
-                all_successful = False
-        
-        if all_successful:
-            logger.info("✅✅✅ 套利策略所有訂單已併發送出！")
-            return {'success': True, 'orders': results}
-        else:
-            logger.error("❌❌❌ 套利策略部分訂單失敗，執行終止！請檢查已成功訂單並手動處理！")
-            # 重要：在併發模式下，部分訂單可能已成功。
-            # 這裡需要一個補償邏輯，例如立即取消已成功的訂單。
-            # 為簡化起見，目前僅打印錯誤日誌。
-            return None
+                logger.error(f"  ❌ 撤銷失敗，請手動處理: {order['instrument']} order_id={order['order_id']}")
+        return None
 
-    def close_position(self, instrument: str, amount: float, order_type: str = 'limit', price: Optional[float] = None, post_only: bool = False) -> Dict:
+    def close_position(self, instrument: str, amount: float,
+                       order_type: str = 'limit', price: Optional[float] = None,
+                       post_only: bool = False) -> Dict:
         """平倉指定合約"""
         position = self.get_position(instrument)
         if not position or position.get('size', 0) == 0:
@@ -123,31 +86,26 @@ class DeribitTrader:
             return {'message': 'No position to close.'}
 
         direction = 'buy' if position['size'] < 0 else 'sell'
-        
-        params = {
-            'instrument_name': instrument,
-            'amount': amount,
-            'type': order_type
-        }
-        if order_type == 'limit':
-            if price is None:
-                raise ValueError("平倉時，限價單必須提供價格")
-            params['price'] = price
-        if post_only:
-            params['post_only'] = True
-            
-        logger.info(f"平倉操作: {direction.upper()} {amount} of {instrument} at price {price} (Post-Only: {post_only})")
-        return self._send_private_request(f'/private/{direction}', params)
+
+        if order_type == 'limit' and price is None:
+            raise ValueError("限價平倉必須提供價格")
+
+        result = self.ws.send_order(
+            direction=direction,
+            instrument=instrument,
+            amount=abs(position['size']),
+            price=price or 0,
+            order_type=order_type,
+            post_only=post_only,
+        )
+        return result or {}
 
     def get_position(self, instrument: str) -> Dict:
-        """獲取特定合約的部位資訊"""
-        return self._send_private_request('/private/get_position', {'instrument_name': instrument})
+        return self.ws.get_position_ws(instrument) or {}
 
     def get_open_orders_by_instrument(self, instrument: str) -> List[Dict]:
-        """獲取特定合約的未結訂單"""
-        return self._send_private_request('/private/get_open_orders_by_instrument', {'instrument_name': instrument}) or []
+        return self.ws.get_open_orders_ws(instrument) or []
 
     def cancel(self, order_id: str) -> Dict:
-        """取消指定訂單"""
         logger.info(f"正在取消訂單: {order_id}")
-        return self._send_private_request('/private/cancel', {'order_id': order_id})
+        return self.ws.cancel_order(order_id) or {}

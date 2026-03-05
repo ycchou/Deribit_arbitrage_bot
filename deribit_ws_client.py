@@ -1,59 +1,210 @@
 # arbitrage_bot/deribit_ws_client.py
 
 """
-負責管理與 Deribit 的 WebSocket 連線、訂閱與數據接收。
+管理與 Deribit 的 WebSocket 連線。
+
+功能：
+  - 公開頻道：訂閱 ticker（raw 每次更新）
+  - 私有頻道：認證後下單、訂閱訂單狀態
+  - 事件驅動：收到 ticker 更新時呼叫 on_ticker_update callback
 """
+
 import asyncio
 import websockets
 import json
 import time
 import logging
 import threading
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Callable
+from concurrent.futures import Future
 
-# 從 config 模組導入設定
 from config import Config
 
 logger = logging.getLogger(__name__)
 
+
 class DeribitWebSocket:
     def __init__(self):
         self.ws = None
-        self.loop = None
-        self.thread = None
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.thread: Optional[threading.Thread] = None
         self.is_running = False
-        
-        # 數據存儲（線程安全）
-        self.ticker_data = {}
+
+        # 公開數據快取（線程安全）
+        self.ticker_data: Dict[str, dict] = {}
         self.data_lock = threading.Lock()
-        self.last_update_time = {}
-        
+        self.last_update_time: Dict[str, float] = {}
+
         # 訂閱管理
-        self.subscribed_instruments = set()  # 已訂閱的合約
-        self.pending_subscriptions = set()
+        self.subscribed_instruments: set = set()
+        self.pending_subscriptions: set = set()
         self.is_connected = False
+        self.is_authenticated = False
         self.connection_ready = threading.Event()
-        
-        # 統計信息
+
+        # 統計
         self.message_count = 0
-        self.last_message_time = 0
-        
-    def start(self):
-        """啟動 WebSocket 連接"""
+        self.last_message_time = 0.0
+
+        # 事件驅動：ticker 更新時的 callback（由 main.py 注入）
+        self._on_ticker_update: Optional[Callable[[str], None]] = None
+
+        # 私有 API：等待中的 RPC 請求 {id: Future}
+        self._pending_requests: Dict[int, Future] = {}
+        self._pending_lock = threading.Lock()
+        self._request_id = 0
+
+    # ─── 公開介面 ──────────────────────────────────────────────────────────────
+
+    def set_on_ticker_update(self, callback: Callable[[str], None]) -> None:
+        """注入 ticker 更新 callback，每次收到新 ticker 時觸發"""
+        self._on_ticker_update = callback
+
+    def start(self) -> None:
         if self.is_running:
             logger.warning('WebSocket 已在運行中')
             return
-        
         self.is_running = True
         self.thread = threading.Thread(target=self._run_event_loop, daemon=True)
         self.thread.start()
         logger.info('✅ WebSocket 線程已啟動')
-        
-    def _run_event_loop(self):
-        """在新線程中運行事件循環"""
+
+    def stop(self) -> None:
+        logger.info('🛑 正在停止 WebSocket...')
+        self.is_running = False
+        self.is_connected = False
+        self.connection_ready.clear()
+        if self.loop:
+            self.loop.call_soon_threadsafe(self.loop.stop)
+        if self.thread:
+            self.thread.join(timeout=5)
+        logger.info('✅ WebSocket 已停止')
+
+    def subscribe_instruments(self, instruments: List[str]) -> bool:
+        """訂閱合約 ticker（smart，只訂閱新增的）"""
+        new_instruments = [i for i in instruments if i not in self.subscribed_instruments]
+        if not new_instruments:
+            return True
+
+        logger.info(f'📡 訂閱 {len(new_instruments)} 個新合約')
+        channels = [f'ticker.{i}.raw' for i in new_instruments]
+
+        if self.is_connected and self.loop:
+            future = asyncio.run_coroutine_threadsafe(
+                self._subscribe_channels(channels), self.loop
+            )
+            try:
+                result = future.result(timeout=5)
+                if result:
+                    self.subscribed_instruments.update(new_instruments)
+                return result
+            except Exception as e:
+                logger.error(f'❌ 訂閱失敗: {e}')
+                return False
+        else:
+            self.pending_subscriptions.update(channels)
+            return False
+
+    def get_ticker(self, instrument_name: str) -> Optional[dict]:
+        with self.data_lock:
+            return self.ticker_data.get(instrument_name)
+
+    def is_data_ready(self, instruments: List[str]) -> bool:
+        with self.data_lock:
+            for inst in instruments:
+                if inst not in self.ticker_data:
+                    return False
+                if time.time() - self.last_update_time.get(inst, 0) > 10:
+                    return False
+        return True
+
+    def wait_for_connection(self, timeout: float = 10) -> bool:
+        return self.connection_ready.wait(timeout=timeout)
+
+    def wait_for_data(self, instruments: List[str], timeout: float = 10) -> bool:
+        start = time.time()
+        while time.time() - start < timeout:
+            if self.is_data_ready(instruments):
+                return True
+            time.sleep(0.1)
+        return False
+
+    # ─── 私有 API：下單（WebSocket RPC）───────────────────────────────────────
+
+    def send_order(self, direction: str, instrument: str, amount: float, price: float,
+                   order_type: str = 'limit', post_only: bool = False) -> Optional[dict]:
+        """
+        透過 WebSocket 送出單筆訂單（同步阻塞，等待回應）。
+        direction: 'buy' | 'sell'
+        回傳交易所回應 dict，失敗回傳 None。
+        """
+        if not self.is_authenticated:
+            logger.error('❌ WebSocket 尚未認證，無法下單')
+            return None
+
+        params: dict = {
+            'instrument_name': instrument,
+            'amount': amount,
+            'type': order_type,
+            'price': price,
+        }
+        if post_only:
+            params['post_only'] = True
+
+        return self._rpc_call(f'private/{direction}', params, timeout=8)
+
+    def cancel_order(self, order_id: str) -> Optional[dict]:
+        """透過 WebSocket 取消訂單"""
+        if not self.is_authenticated:
+            return None
+        return self._rpc_call('private/cancel', {'order_id': order_id}, timeout=8)
+
+    def get_position_ws(self, instrument: str) -> Optional[dict]:
+        """透過 WebSocket 查詢倉位"""
+        if not self.is_authenticated:
+            return None
+        return self._rpc_call('private/get_position', {'instrument_name': instrument}, timeout=8)
+
+    def get_open_orders_ws(self, instrument: str) -> Optional[list]:
+        """透過 WebSocket 查詢掛單"""
+        if not self.is_authenticated:
+            return None
+        result = self._rpc_call('private/get_open_orders_by_instrument',
+                                {'instrument_name': instrument}, timeout=8)
+        return result if isinstance(result, list) else []
+
+    def subscribe_user_orders(self, instrument: str,
+                              callback: Callable[[dict], None]) -> None:
+        """
+        訂閱私有訂單更新頻道 user.orders.{instrument}.raw。
+        每次訂單狀態變化時呼叫 callback(order_data)。
+        """
+        self._user_order_callbacks = getattr(self, '_user_order_callbacks', {})
+        self._user_order_callbacks[instrument] = callback
+        channel = f'user.orders.{instrument}.raw'
+        if self.is_connected and self.loop:
+            asyncio.run_coroutine_threadsafe(
+                self._subscribe_channels([channel]), self.loop
+            )
+        else:
+            self.pending_subscriptions.add(channel)
+
+    def get_statistics(self) -> dict:
+        with self.data_lock:
+            return {
+                'connected': self.is_connected,
+                'authenticated': self.is_authenticated,
+                'subscribed_instruments': len(self.subscribed_instruments),
+                'instruments_with_data': len(self.ticker_data),
+                'message_count': self.message_count,
+                'last_message_age': time.time() - self.last_message_time if self.last_message_time else -1,
+            }
+
+    # ─── 內部：事件循環 ────────────────────────────────────────────────────────
+
+    def _run_event_loop(self) -> None:
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
-        
         while self.is_running:
             try:
                 self.loop.run_until_complete(self._connect_and_run())
@@ -61,217 +212,199 @@ class DeribitWebSocket:
                 logger.error(f'❌ WebSocket 事件循環錯誤: {e}')
                 self.connection_ready.clear()
                 if self.is_running:
-                    logger.info(f'⏳ {Config.WS_RECONNECT_DELAY} 秒後重新連接...')
+                    logger.info(f'⏳ {Config.WS_RECONNECT_DELAY}s 後重連...')
                     time.sleep(Config.WS_RECONNECT_DELAY)
 
-    async def _connect_and_run(self):
-        """連接並運行 WebSocket"""
-        try:
-            async with websockets.connect(
-                Config.DERIBIT_WS_URL,
-                ping_interval=20,
-                ping_timeout=10
-            ) as websocket:
-                self.ws = websocket
-                self.is_connected = True
-                logger.info('✅ WebSocket 已連接到 Deribit')
-                
-                # 重新訂閱之前的頻道
-                if self.pending_subscriptions:
-                    await self._resubscribe()
-                
-                self.connection_ready.set()
-                
-                # 啟動心跳和接收消息
-                await asyncio.gather(
-                    self._heartbeat(),
-                    self._receive_messages()
-                )
-        except websockets.exceptions.ConnectionClosed:
-            logger.warning('⚠️ WebSocket 連接已關閉')
-            self.is_connected = False
-            self.connection_ready.clear()
-        except Exception as e:
-            logger.error(f'❌ WebSocket 連接錯誤: {e}')
-            self.is_connected = False
-            self.connection_ready.clear()
+    async def _connect_and_run(self) -> None:
+        async with websockets.connect(
+            Config.DERIBIT_WS_URL,
+            ping_interval=20,
+            ping_timeout=10,
+        ) as ws:
+            self.ws = ws
+            self.is_connected = True
+            logger.info('✅ WebSocket 已連接到 Deribit')
 
-    async def _heartbeat(self):
-        """發送心跳以保持連接"""
+            # 1. 認證
+            await self._authenticate()
+
+            # 2. 重訂閱待處理的頻道
+            if self.pending_subscriptions:
+                await self._subscribe_channels(list(self.pending_subscriptions))
+                self.pending_subscriptions.clear()
+
+            self.connection_ready.set()
+
+            await asyncio.gather(
+                self._heartbeat(),
+                self._receive_messages(),
+            )
+
+        self.is_connected = False
+        self.is_authenticated = False
+        self.connection_ready.clear()
+        logger.warning('⚠️ WebSocket 連線已關閉')
+
+    async def _authenticate(self) -> None:
+        """使用 client_credentials 認證私有 API"""
+        payload = {
+            'jsonrpc': '2.0',
+            'id': self._next_id(),
+            'method': 'public/auth',
+            'params': {
+                'grant_type': 'client_credentials',
+                'client_id': Config.DERIBIT_CLIENT_ID,
+                'client_secret': Config.DERIBIT_CLIENT_SECRET,
+            },
+        }
+        await self.ws.send(json.dumps(payload))
+        # 等待認證回應（最多 5 秒）
+        deadline = time.time() + 5
+        while not self.is_authenticated and time.time() < deadline:
+            await asyncio.sleep(0.05)
+        if self.is_authenticated:
+            logger.info('🔐 WebSocket 私有 API 認證成功')
+        else:
+            logger.error('❌ WebSocket 認證超時，私有 API 不可用')
+
+    async def _heartbeat(self) -> None:
         while self.is_connected:
-            try:
-                await asyncio.sleep(Config.WS_HEARTBEAT_INTERVAL)
-                if self.ws:
+            await asyncio.sleep(Config.WS_HEARTBEAT_INTERVAL)
+            if self.ws:
+                try:
                     await self.ws.send(json.dumps({
-                        "jsonrpc": "2.0",
-                        "id": int(time.time() * 1000),
-                        "method": "public/test"
+                        'jsonrpc': '2.0',
+                        'id': self._next_id(),
+                        'method': 'public/test',
                     }))
-            except Exception as e:
-                logger.error(f'❌ 心跳發送失敗: {e}')
-                break
-    
-    async def _receive_messages(self):
-        """接收並處理 WebSocket 消息"""
+                except Exception as e:
+                    logger.error(f'❌ 心跳失敗: {e}')
+                    break
+
+    async def _receive_messages(self) -> None:
         try:
-            async for message in self.ws:
-                data = json.loads(message)
+            async for raw in self.ws:
+                data = json.loads(raw)
                 await self._handle_message(data)
                 self.message_count += 1
                 self.last_message_time = time.time()
         except Exception as e:
-            logger.error(f'❌ 接收消息時發生錯誤: {e}')
-    
-    async def _handle_message(self, data: dict):
-        """處理接收到的消息"""
-        try:
-            # 訂閱成功回應
-            if 'result' in data and isinstance(data.get('result'), list):
-                channels = data['result']
-                logger.info(f'✅ 訂閱成功: {len(channels)} 個頻道')
-                return
-            
-            # 訂閱錯誤
-            if 'error' in data:
-                logger.error(f'❌ WebSocket 錯誤: {data["error"]}')
-                return
-            
-            # Ticker 數據更新
-            if 'params' in data and 'data' in data['params']:
-                channel = data['params'].get('channel', '')
-                if channel.startswith('ticker.'):
-                    ticker_data = data['params']['data']
-                    instrument_name = ticker_data.get('instrument_name')
-                    
-                    if instrument_name:
-                        with self.data_lock:
-                            is_new = instrument_name not in self.ticker_data
-                            self.ticker_data[instrument_name] = ticker_data
-                            self.last_update_time[instrument_name] = time.time()
-                        
-                        if is_new:
-                            logger.info(f'📊 首次接收 {instrument_name} 數據')
-                            # 如果是永續合約，顯示資金費率
-                            if instrument_name == 'BTC-PERPETUAL' and 'funding_8h' in ticker_data:
-                                funding_rate = ticker_data['funding_8h']
-                                logger.info(f'    資金費率 (8H): {funding_rate * 100:.4f}%')
-        except Exception as e:
-            logger.error(f'❌ 處理消息時發生錯誤: {e}')
-    
-    async def _resubscribe(self):
-        """重新訂閱所有頻道"""
-        if self.pending_subscriptions:
-            channels = list(self.pending_subscriptions)
-            await self._subscribe_channels(channels)
-            logger.info(f'✅ 已重新訂閱 {len(channels)} 個頻道')
+            logger.error(f'❌ 接收訊息錯誤: {e}')
 
-    async def _subscribe_channels(self, channels: List[str]):
-        """訂閱頻道"""
+    async def _handle_message(self, data: dict) -> None:
+        # ── RPC 回應（有 id）──────────────────────────────────────────────────
+        if 'id' in data:
+            msg_id = data['id']
+
+            # 認證回應
+            if 'result' in data and isinstance(data['result'], dict):
+                if 'access_token' in data['result']:
+                    self.is_authenticated = True
+                    return
+
+            # 一般 RPC 回應
+            with self._pending_lock:
+                fut = self._pending_requests.pop(msg_id, None)
+            if fut and not fut.done():
+                if 'error' in data:
+                    fut.set_exception(RuntimeError(str(data['error'])))
+                else:
+                    fut.set_result(data.get('result'))
+            return
+
+        # ── 訂閱推送（有 params）─────────────────────────────────────────────
+        if 'params' not in data:
+            return
+
+        channel: str = data['params'].get('channel', '')
+        payload = data['params'].get('data')
+
+        # Ticker 更新
+        if channel.startswith('ticker.') and payload:
+            instrument = payload.get('instrument_name')
+            if instrument:
+                with self.data_lock:
+                    is_new = instrument not in self.ticker_data
+                    self.ticker_data[instrument] = payload
+                    self.last_update_time[instrument] = time.time()
+                if is_new:
+                    logger.info(f'📊 首次接收 {instrument} 數據')
+                # 事件驅動：通知主循環
+                if self._on_ticker_update:
+                    try:
+                        self._on_ticker_update(instrument)
+                    except Exception as e:
+                        logger.error(f'❌ on_ticker_update callback 錯誤: {e}')
+
+        # 私有訂單更新
+        elif channel.startswith('user.orders.'):
+            callbacks = getattr(self, '_user_order_callbacks', {})
+            if isinstance(payload, list):
+                for order in payload:
+                    inst = order.get('instrument_name', '')
+                    cb = callbacks.get(inst)
+                    if cb:
+                        try:
+                            cb(order)
+                        except Exception as e:
+                            logger.error(f'❌ user_order callback 錯誤: {e}')
+
+    # ─── 內部工具 ──────────────────────────────────────────────────────────────
+
+    def _next_id(self) -> int:
+        self._request_id += 1
+        return self._request_id
+
+    async def _subscribe_channels(self, channels: List[str]) -> bool:
         if not self.ws or not self.is_connected:
-            logger.warning('⚠️ WebSocket 未連接，無法訂閱')
-            return False
-        
-        try:
-            message = {
-                "jsonrpc": "2.0",
-                "id": int(time.time() * 1000),
-                "method": "public/subscribe",
-                "params": {
-                    "channels": channels
-                }
-            }
-            
-            await self.ws.send(json.dumps(message))
             self.pending_subscriptions.update(channels)
-            
+            return False
+        try:
+            # 公開頻道用 public/subscribe，私有用 private/subscribe
+            public = [c for c in channels if not c.startswith('user.')]
+            private = [c for c in channels if c.startswith('user.')]
+
+            if public:
+                await self.ws.send(json.dumps({
+                    'jsonrpc': '2.0', 'id': self._next_id(),
+                    'method': 'public/subscribe',
+                    'params': {'channels': public},
+                }))
+            if private and self.is_authenticated:
+                await self.ws.send(json.dumps({
+                    'jsonrpc': '2.0', 'id': self._next_id(),
+                    'method': 'private/subscribe',
+                    'params': {'channels': private},
+                }))
             return True
         except Exception as e:
-            logger.error(f'❌ 訂閱頻道失敗: {e}')
+            logger.error(f'❌ 訂閱失敗: {e}')
             return False
 
-    def subscribe_instruments(self, instruments: List[str]) -> bool:
-        """訂閱合約（智能訂閱，只訂閱新合約）"""
-        new_instruments = [inst for inst in instruments if inst not in self.subscribed_instruments]
-        
-        if not new_instruments:
-            logger.debug(f'✓ 所有合約已訂閱，無需重複訂閱')
-            return True
-        
-        logger.info(f'📡 訂閱 {len(new_instruments)} 個新合約（總共 {len(instruments)} 個）')
-        
-        channels = [f'ticker.{instrument}.100ms' for instrument in new_instruments]
-        
-        if self.is_connected and self.loop:
-            future = asyncio.run_coroutine_threadsafe(
-                self._subscribe_channels(channels),
-                self.loop
-            )
-            try:
-                result = future.result(timeout=5)
-                if result:
-                    self.subscribed_instruments.update(new_instruments)
-                    logger.info(f'✅ 成功訂閱新合約，當前已訂閱 {len(self.subscribed_instruments)} 個合約')
-                return result
-            except Exception as e:
-                logger.error(f'❌ 訂閱執行失敗: {e}')
-                return False
-        else:
-            self.pending_subscriptions.update(channels)
-            logger.info(f'⏳ WebSocket 未連接，已加入待處理列表')
-            return False
+    def _rpc_call(self, method: str, params: dict, timeout: float = 8) -> Optional[dict]:
+        """同步阻塞的 WebSocket RPC 呼叫"""
+        if not self.loop or not self.is_connected:
+            return None
 
-    def get_ticker(self, instrument_name: str) -> Optional[Dict]:
-        """獲取 Ticker 數據"""
-        with self.data_lock:
-            return self.ticker_data.get(instrument_name)
+        msg_id = self._next_id()
+        fut: Future = Future()
 
-    def is_data_ready(self, instruments: List[str]) -> bool:
-        """檢查所有需要的合約數據是否已就緒"""
-        with self.data_lock:
-            for instrument in instruments:
-                if instrument not in self.ticker_data:
-                    return False
-                # 檢查數據是否太舊（超過10秒）
-                last_update = self.last_update_time.get(instrument, 0)
-                if time.time() - last_update > 10:
-                    return False
-        return True
+        with self._pending_lock:
+            self._pending_requests[msg_id] = fut
 
-    def get_statistics(self) -> Dict:
-        """獲取統計信息"""
-        with self.data_lock:
-            return {
-                'connected': self.is_connected,
-                'subscribed_instruments': len(self.subscribed_instruments),
-                'instruments_with_data': len(self.ticker_data),
-                'message_count': self.message_count,
-                'last_message_age': time.time() - self.last_message_time if self.last_message_time > 0 else -1
-            }
+        payload = json.dumps({
+            'jsonrpc': '2.0',
+            'id': msg_id,
+            'method': method,
+            'params': params,
+        })
 
-    def wait_for_connection(self, timeout: float = 10) -> bool:
-        """等待 WebSocket 連接就緒"""
-        return self.connection_ready.wait(timeout=timeout)
+        asyncio.run_coroutine_threadsafe(self.ws.send(payload), self.loop)
 
-    def wait_for_data(self, instruments: List[str], timeout: float = 10) -> bool:
-        """等待特定合約數據就緒"""
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            if self.is_data_ready(instruments):
-                return True
-            time.sleep(0.2)
-        return False
-        
-    def stop(self):
-        """停止 WebSocket 連接"""
-        logger.info('🛑 正在停止 WebSocket...')
-        self.is_running = False
-        self.is_connected = False
-        self.connection_ready.clear()
-        
-        if self.loop:
-            self.loop.call_soon_threadsafe(self.loop.stop)
-        
-        if self.thread:
-            self.thread.join(timeout=5)
-        
-        logger.info('✅ WebSocket 已停止')
+        try:
+            return fut.result(timeout=timeout)
+        except Exception as e:
+            logger.error(f'❌ RPC {method} 失敗: {e}')
+            with self._pending_lock:
+                self._pending_requests.pop(msg_id, None)
+            return None
