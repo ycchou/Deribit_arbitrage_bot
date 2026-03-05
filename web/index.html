@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Deribit Arb Bot</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card: #161b22;
+      --card2: #1c2128;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --green: #3fb950;
+      --red: #f85149;
+      --yellow: #d29922;
+      --blue: #58a6ff;
+      --purple: #bc8cff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+      font-size: 13px;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .header h1 { font-size: 15px; font-weight: 600; letter-spacing: -0.3px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); flex-shrink: 0; }
+    .dot.on { background: var(--green); animation: blink 2s ease-in-out infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+    .badge {
+      font-size: 10px; font-weight: 700; letter-spacing: .6px;
+      padding: 2px 7px; border-radius: 3px;
+    }
+    .badge-testnet { background: rgba(210,153,34,.15); color: var(--yellow); border: 1px solid rgba(210,153,34,.4); }
+    .badge-live    { background: rgba(63,185,80,.15);  color: var(--green);  border: 1px solid rgba(63,185,80,.4); }
+    .header-right { margin-left: auto; font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+
+    /* ── Layout ── */
+    .page { padding: 14px 18px; display: flex; flex-direction: column; gap: 12px; }
+
+    /* ── Cards ── */
+    .row4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 13px 15px;
+    }
+    .clabel {
+      font-size: 10px; color: var(--muted); text-transform: uppercase;
+      letter-spacing: .6px; margin-bottom: 6px;
+    }
+    .cval { font-size: 22px; font-weight: 700; letter-spacing: -.5px; line-height: 1; }
+    .csub { font-size: 11px; color: var(--muted); margin-top: 5px; }
+
+    /* ── Colors ── */
+    .g { color: var(--green) }
+    .r { color: var(--red) }
+    .b { color: var(--blue) }
+    .y { color: var(--yellow) }
+    .m { color: var(--muted) }
+
+    /* ── WS status indicator inside card ── */
+    .ws-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+    .ws-row .cval { font-size: 15px; }
+
+    /* ── Section title ── */
+    .stitle {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .7px; color: var(--muted); margin-bottom: 10px;
+    }
+
+    /* ── KV grid inside cards ── */
+    .kv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .kv-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing:.4px; margin-bottom: 2px; }
+    .kv-val { font-size: 13px; font-weight: 600; }
+
+    /* ── Active position ── */
+    .no-pos { color: var(--muted); font-style: italic; font-size: 12px; }
+    .countdown { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 6px 0 10px; }
+    .cd-ok  { color: var(--green) }
+    .cd-warn{ color: var(--yellow); animation: blink 1.5s infinite }
+    .cd-fire{ color: var(--red);    animation: blink .7s infinite }
+
+    /* ── Trade history table ── */
+    .trade-wrap { overflow-x: auto; margin-top: 8px; }
+    table { width: 100%; border-collapse: collapse; }
+    th { font-size: 10px; text-transform: uppercase; letter-spacing:.4px; color: var(--muted); font-weight: 500; text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+    td { font-size: 12px; padding: 7px 10px; border-bottom: 1px solid rgba(48,54,61,.5); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,.025); }
+    .empty { color: var(--muted); font-style: italic; padding: 14px 10px; font-size: 12px; }
+
+    /* ── Log stream ── */
+    .log-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .log-hdr {
+      padding: 8px 14px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 10px; text-transform: uppercase; letter-spacing:.6px; color: var(--muted);
+    }
+    .log-body { height: 220px; overflow-y: auto; padding: 4px 0; }
+    .log-body::-webkit-scrollbar { width: 5px; }
+    .log-body::-webkit-scrollbar-track { background: transparent; }
+    .log-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    .ll { padding: 2px 14px; font-size: 12px; white-space: pre-wrap; word-break: break-all; line-height: 1.6; }
+    .ll:hover { background: rgba(255,255,255,.03); }
+    .lt { color: var(--muted); }
+    .lINFO    { color: var(--blue); }
+    .lWARNING { color: var(--yellow); }
+    .lERROR   { color: var(--red); }
+    .lDEBUG   { color: #555; }
+    .lmsg { color: var(--text); }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="dot" id="dot"></div>
+  <h1>Deribit Arb Bot</h1>
+  <div class="badge badge-testnet" id="net-badge">TESTNET</div>
+  <div class="header-right">
+    <span id="conn-label">Connecting…</span>
+  </div>
+</div>
+
+<div class="page">
+
+  <!-- Row 1: BTC / Funding / WS / Uptime -->
+  <div class="row4">
+    <div class="card">
+      <div class="clabel">BTC Price</div>
+      <div class="cval b" id="btc-price">—</div>
+      <div class="csub">USD  Perpetual</div>
+    </div>
+    <div class="card">
+      <div class="clabel">Funding Rate (8h)</div>
+      <div class="cval" id="funding-val">—</div>
+      <div class="csub">Per 8-hour period</div>
+    </div>
+    <div class="card">
+      <div class="clabel">WebSocket</div>
+      <div class="ws-row">
+        <div class="dot" id="ws-dot"></div>
+        <div class="cval" id="ws-label">Disconnected</div>
+      </div>
+      <div class="csub" id="ws-sub">—</div>
+    </div>
+    <div class="card">
+      <div class="clabel">Uptime</div>
+      <div class="cval m" id="uptime">—</div>
+      <div class="csub" id="uptime-sub">—</div>
+    </div>
+  </div>
+
+  <!-- Row 2: CPU / CPU peak / RAM / RAM peak -->
+  <div class="row4">
+    <div class="card">
+      <div class="clabel">CPU Usage</div>
+      <div class="cval" id="cpu-now">—</div>
+      <div class="csub">Current</div>
+    </div>
+    <div class="card">
+      <div class="clabel">CPU 24h Peak</div>
+      <div class="cval m" id="cpu-peak">—</div>
+      <div class="csub">Max in last 24h</div>
+    </div>
+    <div class="card">
+      <div class="clabel">RAM Usage</div>
+      <div class="cval" id="ram-now">—</div>
+      <div class="csub">Current</div>
+    </div>
+    <div class="card">
+      <div class="clabel">RAM 24h Peak</div>
+      <div class="cval m" id="ram-peak">—</div>
+      <div class="csub">Max in last 24h</div>
+    </div>
+  </div>
+
+  <!-- Row 3: Scan info + Active position -->
+  <div class="row2">
+    <div class="card">
+      <div class="stitle">Current Scan</div>
+      <div class="kv-grid">
+        <div>
+          <div class="kv-label">Status</div>
+          <div class="kv-val m" id="sc-status">Waiting…</div>
+        </div>
+        <div>
+          <div class="kv-label">Strike</div>
+          <div class="kv-val" id="sc-strike">—</div>
+        </div>
+        <div>
+          <div class="kv-label">Best Profit</div>
+          <div class="kv-val m" id="sc-profit">—</div>
+        </div>
+        <div>
+          <div class="kv-label">Strategy</div>
+          <div class="kv-val" id="sc-strategy">—</div>
+        </div>
+      </div>
+      <div style="margin-top:10px">
+        <div class="kv-label">Last Scan</div>
+        <div style="font-size:11px; color:var(--muted)" id="sc-time">—</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="stitle">Active Position</div>
+      <div id="pos-content"><div class="no-pos">No active position</div></div>
+    </div>
+  </div>
+
+  <!-- Trade history -->
+  <div class="card">
+    <div class="stitle">Trade History</div>
+    <div id="trade-wrap"><div class="empty">No trades recorded yet</div></div>
+  </div>
+
+  <!-- Live log -->
+  <div class="log-wrap">
+    <div class="log-hdr">
+      <span>Live Log</span>
+      <span id="log-cnt">0 lines</span>
+    </div>
+    <div class="log-body" id="log-body"></div>
+  </div>
+
+</div><!-- /page -->
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+const S = {
+  btcPrice: 0, fundingRate: 0,
+  wsConn: false, wsAuth: false,
+  scanInfo: {}, activePos: null,
+  trades: [], system: {},
+};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+
+function fmtPrice(n) {
+  if (!n) return '—';
+  return '$' + Math.round(n).toLocaleString('en-US');
+}
+function fmtPct(n) {
+  return (n == null) ? '—' : n.toFixed(1) + '%';
+}
+function fmtFunding(r) {
+  if (r == null) return '—';
+  const pct = (r * 100).toFixed(4);
+  const cls = r >= 0 ? 'g' : 'r';
+  return `<span class="${cls}">${r >= 0 ? '+' : ''}${pct}%</span>`;
+}
+function fmtUptime(s) {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+function metricColor(pct) {
+  if (pct > 80) return 'r';
+  if (pct > 60) return 'y';
+  return 'g';
+}
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function countdown(ts) {
+  const diff = Math.floor((ts - Date.now()) / 1000);
+  if (diff <= 0) return { text: 'EXPIRED', cls: 'cd-fire' };
+  const h = Math.floor(diff / 3600), m = Math.floor((diff % 3600) / 60), s = diff % 60;
+  const text = [h, m, s].map(v => String(v).padStart(2,'0')).join(':');
+  const cls = diff < 60 ? 'cd-fire' : diff < 600 ? 'cd-warn' : 'cd-ok';
+  return { text, cls };
+}
+
+// ── Renderers ─────────────────────────────────────────────────────────────────
+function renderSystem() {
+  const sys = S.system;
+  if (!sys || !sys.uptime_seconds) return;
+  $('uptime').textContent = fmtUptime(sys.uptime_seconds);
+  const c = metricColor(sys.cpu_percent);
+  $('cpu-now').innerHTML  = `<span class="${c}">${fmtPct(sys.cpu_percent)}</span>`;
+  $('cpu-peak').textContent = fmtPct(sys.cpu_peak_24h);
+  const rc = metricColor(sys.ram_percent);
+  $('ram-now').innerHTML  = `<span class="${rc}">${fmtPct(sys.ram_percent)}</span>`;
+  $('ram-peak').textContent = fmtPct(sys.ram_peak_24h);
+}
+
+function renderWs() {
+  const dot = $('ws-dot');
+  if (S.wsConn) {
+    dot.classList.add('on');
+    $('ws-label').textContent = 'Connected';
+    $('ws-label').className = 'cval g';
+    const sub = $('ws-sub');
+    sub.textContent = S.wsAuth ? '✓ Authenticated' : '⚠ Not authenticated';
+    sub.style.color = S.wsAuth ? 'var(--green)' : 'var(--yellow)';
+  } else {
+    dot.classList.remove('on');
+    $('ws-label').textContent = 'Disconnected';
+    $('ws-label').className = 'cval r';
+    $('ws-sub').textContent = 'Reconnecting…';
+    $('ws-sub').style.color = 'var(--red)';
+  }
+}
+
+function renderScan() {
+  const s = S.scanInfo;
+  if (!s || !Object.keys(s).length) return;
+  const statusMap = {
+    'cooling_down':       ['❄️ Cooling Down', 'b'],
+    'opportunity_found':  ['🎯 Opportunity!',  'g'],
+    'scanning':           ['🔍 Scanning',      'm'],
+    'no_opportunity':     ['📊 No Opportunity','m'],
+  };
+  const [txt, cls] = statusMap[s.status] || [s.status || 'Waiting…', 'm'];
+  $('sc-status').textContent = txt;
+  $('sc-status').className = `kv-val ${cls}`;
+  $('sc-strike').textContent   = s.strike ? '$' + Math.round(s.strike).toLocaleString() : '—';
+  const profit = s.best_profit;
+  $('sc-profit').textContent   = profit != null ? '$' + profit.toFixed(2) : '—';
+  $('sc-profit').style.color   = profit > 0 ? 'var(--green)' : 'var(--muted)';
+  $('sc-strategy').textContent = s.strategy_name || '—';
+  $('sc-time').textContent     = s.last_scan_time
+    ? new Date(s.last_scan_time * 1000).toLocaleTimeString() : '—';
+}
+
+function renderPos() {
+  const div = $('pos-content');
+  if (!S.activePos) {
+    div.innerHTML = '<div class="no-pos">No active position</div>';
+    return;
+  }
+  const pos = S.activePos;
+  const cd = countdown(pos.expiry_timestamp);
+  const expStr = new Date(pos.expiry_timestamp).toLocaleString();
+  div.innerHTML = `
+    <div class="kv-label">Expires In</div>
+    <div class="countdown ${cd.cls}">${cd.text}</div>
+    <div class="kv-grid">
+      <div>
+        <div class="kv-label">Instrument</div>
+        <div class="kv-val">${esc(pos.instrument || 'BTC-PERPETUAL')}</div>
+      </div>
+      <div>
+        <div class="kv-label">Amount</div>
+        <div class="kv-val">${pos.amount} BTC</div>
+      </div>
+      <div>
+        <div class="kv-label">Status</div>
+        <div class="kv-val">${esc(pos.status || '—')}</div>
+      </div>
+      <div>
+        <div class="kv-label">Expiry</div>
+        <div class="kv-val" style="font-size:10px;line-height:1.5">${expStr}</div>
+      </div>
+    </div>`;
+}
+
+function renderTrades() {
+  const div = $('trade-wrap');
+  if (!S.trades.length) {
+    div.innerHTML = '<div class="empty">No trades recorded yet</div>';
+    return;
+  }
+  const rows = [...S.trades].reverse().map(t => `
+    <tr>
+      <td>${esc(t.time || '—')}</td>
+      <td>${esc(t.strategyType || '—')}</td>
+      <td>${esc(t.strategyName || '—')}</td>
+      <td>${t.strike ? '$' + Math.round(t.strike).toLocaleString() : '—'}</td>
+      <td class="g">$${(t.netProfit || 0).toFixed(2)}</td>
+    </tr>`).join('');
+  div.innerHTML = `
+    <div class="trade-wrap">
+      <table>
+        <thead><tr><th>Time</th><th>Type</th><th>Strategy</th><th>Strike</th><th>Net Profit</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function appendLog(e) {
+  const body = $('log-body');
+  const line = document.createElement('div');
+  line.className = 'll';
+  line.innerHTML = `<span class="lt">[${esc(e.time)}]</span> <span class="l${esc(e.level)}">${e.level.padEnd(7)}</span> <span class="lmsg">${esc(e.message)}</span>`;
+  body.appendChild(line);
+  while (body.children.length > 200) body.removeChild(body.firstChild);
+  body.scrollTop = body.scrollHeight;
+  $('log-cnt').textContent = body.children.length + ' lines';
+}
+
+// ── Message handler ───────────────────────────────────────────────────────────
+function handle(msg) {
+  switch (msg.type) {
+    case 'snapshot':
+      S.btcPrice    = msg.btc_price;
+      S.fundingRate = msg.funding_rate;
+      S.wsConn      = msg.ws_connected;
+      S.wsAuth      = msg.ws_authenticated;
+      S.scanInfo    = msg.scan_info || {};
+      S.activePos   = msg.active_position;
+      S.trades      = msg.trade_history || [];
+      S.system      = msg.system || {};
+      $('btc-price').textContent = fmtPrice(S.btcPrice);
+      $('funding-val').innerHTML = fmtFunding(S.fundingRate);
+      if (msg.log_buffer) msg.log_buffer.forEach(appendLog);
+      renderWs(); renderScan(); renderPos(); renderTrades(); renderSystem();
+      break;
+    case 'btc_price':
+      S.btcPrice = msg.value;
+      $('btc-price').textContent = fmtPrice(msg.value);
+      break;
+    case 'funding_rate':
+      S.fundingRate = msg.value;
+      $('funding-val').innerHTML = fmtFunding(msg.value);
+      break;
+    case 'ws_status':
+      S.wsConn = msg.connected; S.wsAuth = msg.authenticated;
+      renderWs();
+      break;
+    case 'scan_info':
+      S.scanInfo = msg.data; renderScan();
+      break;
+    case 'active_position':
+      S.activePos = msg.position; renderPos();
+      break;
+    case 'trade':
+      S.trades.push(msg.trade); renderTrades();
+      break;
+    case 'log':
+      appendLog(msg);
+      break;
+  }
+}
+
+// ── WebSocket client ──────────────────────────────────────────────────────────
+let ws, pingTimer, reconnDelay = 1000;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+  ws.onopen = () => {
+    $('dot').classList.add('on');
+    $('conn-label').textContent = '● Dashboard connected';
+    $('conn-label').style.color = 'var(--green)';
+    reconnDelay = 1000;
+    pingTimer = setInterval(() => ws.readyState === 1 && ws.send('ping'), 25000);
+  };
+
+  ws.onmessage = e => { try { handle(JSON.parse(e.data)); } catch {} };
+
+  ws.onclose = () => {
+    clearInterval(pingTimer);
+    $('dot').classList.remove('on');
+    $('conn-label').textContent = `Reconnecting in ${reconnDelay/1000}s…`;
+    $('conn-label').style.color = 'var(--red)';
+    setTimeout(connect, reconnDelay);
+    reconnDelay = Math.min(reconnDelay * 2, 30000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+// ── Tick every second (uptime + countdown) ────────────────────────────────────
+setInterval(() => {
+  if (S.system.uptime_seconds != null) {
+    S.system.uptime_seconds++;
+    $('uptime').textContent = fmtUptime(S.system.uptime_seconds);
+  }
+  if (S.activePos) renderPos();
+}, 1000);
+
+// ── Refresh system metrics from REST every 30s ────────────────────────────────
+setInterval(async () => {
+  try {
+    const r = await fetch('/api/snapshot');
+    const d = await r.json();
+    if (d.system) { S.system = d.system; renderSystem(); }
+  } catch {}
+}, 30000);
+
+connect();
+</script>
+</body>
+</html>

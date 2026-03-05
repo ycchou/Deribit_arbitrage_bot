@@ -1,3 +1,6 @@
 requests
 websockets
 pyyaml
+fastapi
+uvicorn[standard]
+psutil

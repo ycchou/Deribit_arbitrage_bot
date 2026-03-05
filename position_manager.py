@@ -14,6 +14,7 @@ from typing import Dict, Optional
 from config import Config
 from deribit_trader import DeribitTrader
 from deribit_ws_client import DeribitWebSocket
+from bot_state import bot_state
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,12 @@ class PositionManager:
                 'maker_order_id': None,
             }
         self._maker_order_filled.clear()
+        bot_state.update_active_position({
+            'instrument': 'BTC-PERPETUAL',
+            'amount': amount,
+            'expiry_timestamp': expiry_timestamp,
+            'status': 'monitoring',
+        })
         logger.info(f"📈 新部位加入管理，到期: {time.ctime(expiry_timestamp / 1000)}")
 
     # ─── WebSocket 訂單更新 callback ──────────────────────────────────────────
@@ -115,6 +122,7 @@ class PositionManager:
                 with self.lock:
                     self.active_position = None
                 self._maker_order_filled.clear()
+                bot_state.update_active_position(None)
 
         # 階段三：強制 Taker 平倉
         elif (0 < time_to_expiry <= Config.TAKER_FORCE_CLOSE_SECONDS
@@ -185,3 +193,4 @@ class PositionManager:
 
         with self.lock:
             self.active_position = None
+        bot_state.update_active_position(None)

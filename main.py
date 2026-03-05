@@ -19,6 +19,8 @@ from notifications import send_trade_execution_notification, send_liquidity_issu
 from config import Config
 from deribit_trader import DeribitTrader
 from position_manager import PositionManager
+from bot_state import bot_state, BotStateLogHandler
+from live_server import start_live_server
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +132,7 @@ def perform_final_check_and_execute(
             expiry_timestamp=final['expiryTimestamp'],
             amount=required_amount,
         )
+        bot_state.add_trade(final)
         return True
 
     logger.error("❌ 交易執行失敗")
@@ -149,11 +152,13 @@ def run_scan(ws_client: DeribitWebSocket, trader: DeribitTrader,
         if elapsed < Config.COOLDOWN_PERIOD_SECONDS:
             remaining = (Config.COOLDOWN_PERIOD_SECONDS - elapsed) / 60
             logger.info(f"❄️ 冷卻期剩餘 {remaining:.1f} 分鐘")
+            bot_state.update_scan_info({'status': 'cooling_down', 'cooldown_remaining_min': round(remaining, 1)})
             return
 
         perp_ticker = ws_client.get_ticker('BTC-PERPETUAL')
         if not perp_ticker or not perp_ticker.get('last_price'):
             return
+        bot_state.update_btc_price(perp_ticker['last_price'])
 
         expiry_info = get_tomorrow_expiry()
         if not expiry_info:
@@ -192,10 +197,21 @@ def run_scan(ws_client: DeribitWebSocket, trader: DeribitTrader,
 
         if not all_opportunities:
             logger.info(f'📊 未發現高利潤機會 (> ${Config.MIN_NET_PROFIT_OPPORTUNITY})')
+            bot_state.update_scan_info({
+                'status': 'no_opportunity',
+                'last_scan_time': time.time(),
+            })
             return
 
         best = max(all_opportunities, key=lambda x: x['netProfit'])
         logger.info(f"🏆 最佳機會: {best['strategyName']} @ ${best['strike']} 淨利=${best['netProfit']:.2f}")
+        bot_state.update_scan_info({
+            'status': 'opportunity_found',
+            'strike': best['strike'],
+            'best_profit': best['netProfit'],
+            'strategy_name': best['strategyName'],
+            'last_scan_time': time.time(),
+        })
         perform_final_check_and_execute(best, ws_client, trader, pos_manager)
 
     except Exception as e:
@@ -204,7 +220,16 @@ def run_scan(ws_client: DeribitWebSocket, trader: DeribitTrader,
 
 if __name__ == '__main__':
     setup_logging()
+
+    # Attach log handler so all log messages appear in the live dashboard
+    log_handler = BotStateLogHandler(bot_state)
+    log_handler.setLevel(logging.INFO)
+    logging.getLogger().addHandler(log_handler)
+
     logger.info('🤖 Deribit 套利機器人啟動')
+
+    # Start live dashboard server in background
+    start_live_server(bot_state)
 
     ws_client = DeribitWebSocket()
     ws_client.start()
@@ -244,6 +269,8 @@ if __name__ == '__main__':
         while True:
             time.sleep(Config.SCAN_INTERVAL_SECONDS)
             iteration += 1
+            # Update WS status on dashboard every iteration
+            bot_state.update_ws_status(ws_client.is_connected, ws_client.is_authenticated)
             if ws_client.is_connected:
                 logger.debug(f'🔄 兜底掃描 #{iteration}')
                 run_scan(ws_client, trader, pos_manager)

@@ -65,3 +65,7 @@ class Config:
     # ── 掃描設定 ────────────────────────────────────────────────────────────────
     SCAN_INTERVAL_SECONDS      = 1   # 主循環等待時間（秒），事件驅動後僅作兜底
     MIN_NET_PROFIT_OPPORTUNITY = 20  # 最低淨利潤門檻（美元）
+
+    # ── Live Server ─────────────────────────────────────────────────────────────
+    SERVER_HOST = _secrets.get("server", {}).get("host", "127.0.0.1")
+    SERVER_PORT = int(_secrets.get("server", {}).get("port", 8080))
