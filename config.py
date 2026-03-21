@@ -58,9 +58,6 @@ class Config:
     TRADE_AMOUNT_BTC         = 0.3          # 單次交易單位
     COOLDOWN_PERIOD_SECONDS  = 28 * 60 * 60 # 28 小時冷卻期
 
-    # 流動性門檻：要求帳面深度至少是交易量的 1.5 倍，避免吃光整個掛單
-    MIN_LIQUIDITY_BTC        = TRADE_AMOUNT_BTC * 1.5   # 0.45 BTC
-
     # 掃描範圍：ATM 前後各幾檔 strike（1 = ±1，2 = ±2）
     STRIKE_SCAN_RANGE        = 2
 
