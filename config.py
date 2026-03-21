@@ -68,7 +68,8 @@ class Config:
 
     # ── 風險控制 ─────────────────────────────────────────────────────────────────
     MAX_CONCURRENT_POSITIONS = 1    # 最多同時持有 1 個部位（硬性限制）
-    FAILURE_COOLDOWN_SECONDS = 300  # 下單失敗後 5 分鐘冷卻，避免連續重試
+    FAILURE_COOLDOWN_SECONDS    = 300  # 下單失敗後 5 分鐘冷卻，避免連續重試
+    ENTRY_FILL_TIMEOUT_SECONDS  = 10   # 等待三條腿成交的最長秒數
 
     # ── Live Server ─────────────────────────────────────────────────────────────
     SERVER_HOST = _secrets.get("server", {}).get("host", "127.0.0.1")

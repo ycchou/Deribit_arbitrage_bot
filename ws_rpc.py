@@ -65,6 +65,12 @@ class WsRpcMixin:
         return self._rpc_call('private/get_position',
                                {'instrument_name': instrument}, timeout=8)
 
+    def get_order_state_ws(self, order_id: str) -> Optional[dict]:
+        """查詢單筆訂單狀態。"""
+        if not self.is_authenticated:
+            return None
+        return self._rpc_call('private/get_order_state', {'order_id': order_id}, timeout=3)
+
     def get_open_orders_ws(self, instrument: str) -> Optional[list]:
         """透過 WebSocket 查詢掛單。"""
         if not self.is_authenticated:
