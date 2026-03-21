@@ -15,22 +15,30 @@ logger = logging.getLogger(__name__)
 _cache = CacheManager()
 
 
+def _slice_strikes(sorted_strikes: List[float], price: float) -> List[float]:
+    """依 STRIKE_SCAN_RANGE 截取 ATM 附近的履約價子集。"""
+    closest_idx = min(
+        range(len(sorted_strikes)),
+        key=lambda i: abs(sorted_strikes[i] - price),
+    )
+    r     = Config.STRIKE_SCAN_RANGE
+    start = max(0, closest_idx - r)
+    end   = min(len(sorted_strikes), closest_idx + r + 1)
+    return sorted_strikes[start:end]
+
+
 def get_target_strikes(perpetual_price: float, expiry_date_str: str) -> List[float]:
     """
-    取得指定到期日、靠近永續價格前後各一檔的履約價（帶快取）。
-    回傳排序後的 float 列表。
+    取得指定到期日、靠近永續價格前後各 STRIKE_SCAN_RANGE 檔的履約價。
+    快取 key 以 $2000 為步長，降低 BTC 在整千位震盪時的 REST 觸發頻率。
     """
-    price_range = int(perpetual_price / 1000) * 1000
-    cache_key   = f'strikes_{expiry_date_str}_{price_range}'
+    # $2000 步長：比 $1000 更穩定，減少 BTC 在整千位附近抖動時的 cache miss
+    price_bucket = int(perpetual_price / 2000) * 2000
+    cache_key    = f'strikes_{expiry_date_str}_{price_bucket}'
 
     cached = _cache.get(cache_key, 300)
     if cached:
-        sorted_strikes = cached
-        closest_idx = min(range(len(sorted_strikes)),
-                          key=lambda i: abs(sorted_strikes[i] - perpetual_price))
-        start = max(0, closest_idx - 1)
-        end   = min(len(sorted_strikes), closest_idx + 2)
-        return sorted_strikes[start:end]
+        return _slice_strikes(cached, perpetual_price)
 
     url    = f'{Config.DERIBIT_BASE_URL}/public/get_instruments'
     params = {'currency': 'BTC', 'kind': 'option', 'expired': 'false'}
@@ -58,11 +66,7 @@ def get_target_strikes(perpetual_price: float, expiry_date_str: str) -> List[flo
         if not sorted_strikes:
             return []
 
-        closest_idx = min(range(len(sorted_strikes)),
-                          key=lambda i: abs(sorted_strikes[i] - perpetual_price))
-        start = max(0, closest_idx - 1)
-        end   = min(len(sorted_strikes), closest_idx + 2)
-        return sorted_strikes[start:end]
+        return _slice_strikes(sorted_strikes, perpetual_price)
 
     except requests.RequestException as e:
         logger.error(f'取得履約價失敗（網路）: {e}')

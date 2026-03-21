@@ -52,7 +52,7 @@ def perform_final_check_and_execute(
         return False
 
     # ── 流動性再確認 ──────────────────────────────────────────────────────────
-    required_amount = Config.TRADE_AMOUNT_BTC
+    required_amount = Config.MIN_LIQUIDITY_BTC   # 1.5x buffer，確保不吃光整檔深度
     liquidity_map = {
         'A': {
             'callAmount': call_ticker['best_bid_amount'],

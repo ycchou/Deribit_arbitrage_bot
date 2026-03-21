@@ -77,9 +77,9 @@ def check_arbitrage_opportunity(
             call_instrument, put_instrument, 'sell', 'buy', 'long',
         )
         liquidity_a_ok = all([
-            call_ticker['best_bid_amount'] >= Config.TRADE_AMOUNT_BTC,
-            put_ticker['best_ask_amount']  >= Config.TRADE_AMOUNT_BTC,
-            perpetual_ticker['best_ask_amount'] >= Config.TRADE_AMOUNT_BTC,
+            call_ticker['best_bid_amount'] >= Config.MIN_LIQUIDITY_BTC,
+            put_ticker['best_ask_amount']  >= Config.MIN_LIQUIDITY_BTC,
+            perpetual_ticker['best_ask_amount'] >= Config.MIN_LIQUIDITY_BTC,
         ])
 
         # ── 策略 B：買 Call + 賣 Put + 賣 Perp ───────────────────────────────
@@ -91,9 +91,9 @@ def check_arbitrage_opportunity(
             call_instrument, put_instrument, 'buy', 'sell', 'short',
         )
         liquidity_b_ok = all([
-            call_ticker['best_ask_amount'] >= Config.TRADE_AMOUNT_BTC,
-            put_ticker['best_bid_amount']  >= Config.TRADE_AMOUNT_BTC,
-            perpetual_ticker['best_bid_amount'] >= Config.TRADE_AMOUNT_BTC,
+            call_ticker['best_ask_amount'] >= Config.MIN_LIQUIDITY_BTC,
+            put_ticker['best_bid_amount']  >= Config.MIN_LIQUIDITY_BTC,
+            perpetual_ticker['best_bid_amount'] >= Config.MIN_LIQUIDITY_BTC,
         ])
 
         # ── 日誌 ──────────────────────────────────────────────────────────────
