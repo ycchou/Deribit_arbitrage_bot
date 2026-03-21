@@ -18,7 +18,6 @@ from deribit_trader import DeribitTrader
 from position_manager import PositionManager
 from bot_state import bot_state, BotStateLogHandler
 from live_server import start_live_server
-from state_store import load as load_state
 from notifications import send_startup_notification
 from global_state import global_state
 from scan_orchestrator import run_scan
@@ -35,17 +34,6 @@ def main() -> None:
     logging.getLogger().addHandler(log_handler)
 
     logger.info('🤖 Deribit 套利機器人啟動')
-
-    # Fix #10: 從持久化狀態恢復 last_trade_time
-    saved = load_state()
-    if saved.get('last_trade_time'):
-        global_state.last_trade_time = saved['last_trade_time']
-        remaining = (Config.COOLDOWN_PERIOD_SECONDS
-                     - (time.time() - global_state.last_trade_time)) / 60
-        if remaining > 0:
-            logger.info(f"📁 讀取上次交易時間，冷卻剩餘 {remaining:.1f} 分鐘")
-        else:
-            logger.info("📁 讀取上次交易時間，冷卻已結束")
 
     # 啟動 live dashboard
     start_live_server(bot_state)

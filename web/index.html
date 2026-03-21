@@ -151,6 +151,7 @@
     .pill-yellow { background: rgba(240,185,11,.12); color: var(--yellow); border: 1px solid rgba(240,185,11,.25); }
     .pill-red    { background: rgba(246,70,93,.12);  color: var(--red);    border: 1px solid rgba(246,70,93,.25); }
     .pill-blue   { background: rgba(59,130,246,.12); color: var(--blue);   border: 1px solid rgba(59,130,246,.25); }
+    .pill-orange { background: rgba(249,159,2,.12);  color: var(--orange); border: 1px solid rgba(249,159,2,.25); }
     .pill-muted  { background: rgba(132,142,156,.1); color: var(--muted);  border: 1px solid rgba(132,142,156,.2); }
     .pill-dot    { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
     .pill-dot.blink { animation: pulse 1s ease-in-out infinite; }
@@ -532,7 +533,6 @@ const S = {
   scanInfo: {}, activePos: null,
   trades: [],
   system: {},
-  lastTradeTime: 0,
   priceHistory: [],   // { t, v } last 80 BTC prices for sparkline
   startTime: null,
 };
@@ -792,10 +792,11 @@ function renderScan() {
   if (!s || !Object.keys(s).length) return;
 
   const pillMap = {
-    cooling_down:      ['pill pill-blue',   'Cooling Down', false],
-    opportunity_found: ['pill pill-green',  'Opportunity!', true],
-    scanning:          ['pill pill-yellow', 'Scanning',     true],
-    no_opportunity:    ['pill pill-muted',  'No Match',     false],
+    position_open:     ['pill pill-blue',   'Position Open', false],
+    cooling_down:      ['pill pill-orange', 'Cooling Down',  false],
+    opportunity_found: ['pill pill-green',  'Opportunity!',  true],
+    scanning:          ['pill pill-yellow', 'Scanning',      true],
+    no_opportunity:    ['pill pill-muted',  'No Match',      false],
   };
   const [pillCls, pillTxt, blinking] = pillMap[s.status] || ['pill pill-muted', s.status || 'Waiting', false];
   $('scan-pill').className = pillCls;
@@ -895,17 +896,22 @@ function renderKpis() {
 }
 
 function renderNextTrade() {
-  const COOLDOWN = 28 * 3600;
-  const now = Date.now() / 1000;
-  if (S.scanInfo.status === 'cooling_down' && S.lastTradeTime > 0) {
-    const remainSec = Math.max(0, Math.floor(S.lastTradeTime + COOLDOWN - now));
-    if (remainSec > 0) {
-      $('next-label').textContent = 'Next Trade In';
-      $('kpi-next').textContent = fmtCountdown(remainSec);
-      $('kpi-next').className   = 'metric-val sm c-orange';
-      $('kpi-next-sub').textContent = 'Cooling down…';
-      return;
-    }
+  // Position-based cooldown: bot waits until active position expires
+  if (S.activePos) {
+    const cd = countdown(S.activePos.expiry_timestamp);
+    $('next-label').textContent = 'Next Trade In';
+    $('kpi-next').textContent = cd.text;
+    $('kpi-next').className   = 'metric-val sm ' + (cd.cls === 'cd-fire' ? 'c-red' : cd.cls === 'cd-warn' ? 'c-orange' : 'c-blue');
+    $('kpi-next-sub').textContent = 'Holding position…';
+    return;
+  }
+  if (S.scanInfo.status === 'cooling_down') {
+    const rem = S.scanInfo.cooldown_remaining_min;
+    $('next-label').textContent = 'Next Trade In';
+    $('kpi-next').textContent = rem != null ? fmtCountdown(Math.round(rem * 60)) : '…';
+    $('kpi-next').className   = 'metric-val sm c-orange';
+    $('kpi-next-sub').textContent = 'Failure cooldown…';
+    return;
   }
   $('next-label').textContent = 'Next Trade';
   $('kpi-next').textContent = 'Ready';
@@ -1019,7 +1025,6 @@ function handle(msg) {
       S.activePos      = msg.active_position;
       S.trades         = msg.trade_history || [];
       S.system         = msg.system || {};
-      S.lastTradeTime  = msg.last_trade_time || 0;
 
       renderBtc(S.btcPrice);
       renderFunding(S.fundingRate);
@@ -1069,7 +1074,6 @@ function handle(msg) {
 
     case 'trade':
       S.trades.push(msg.trade);
-      S.lastTradeTime = msg.trade.timestamp || (Date.now() / 1000);
       renderKpis();
       renderNextTrade();
       renderTrades();

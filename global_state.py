@@ -2,7 +2,9 @@
 
 """
 GlobalState：交易引擎的執行期共用狀態（單例）。
-包含：冷卻計時器、掃描節流鎖、交易互斥鎖。
+包含：掃描節流、失敗冷卻計時、交易互斥鎖。
+
+冷卻邏輯：不再使用固定時間冷卻，改由 active_position 存在與否控制。
 """
 
 import threading
@@ -13,7 +15,6 @@ class GlobalState:
     def __init__(self):
         self.current_instruments: set  = set()
         self.last_expiry_date: str     = None
-        self.last_trade_time: float    = 0.0
         self.last_failure_time: float  = 0.0
 
         # 節流：避免同一時間連發多次掃描（最快 50ms 一次）

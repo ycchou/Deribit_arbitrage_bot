@@ -4,8 +4,9 @@
 掃描協調器：每次 BTC-PERPETUAL ticker 更新時觸發，
 協調冷卻期檢查、行使價訂閱、機會掃描、交易鎖、最終執行。
 
+冷卻邏輯：持有倉位期間不掃描，倉位到期平倉後立即恢復。
 Fix #1  _trade_lock non-blocking acquire，避免重複執行
-Fix #8  失敗冷卻期檢查
+Fix #8  下單失敗後 5 分鐘短暫冷卻
 Fix #9  鎖內雙重確認無活躍部位（硬性上限 = 1）
 """
 
@@ -33,14 +34,17 @@ def run_scan(ws_client, trader, pos_manager) -> None:
         if not global_state.should_scan():
             return
 
-        # ── 28 小時冷卻期 ─────────────────────────────────────────────────────
-        elapsed = time.time() - global_state.last_trade_time
-        if elapsed < Config.COOLDOWN_PERIOD_SECONDS:
-            remaining = (Config.COOLDOWN_PERIOD_SECONDS - elapsed) / 60
-            logger.info(f"❄️ 冷卻期剩餘 {remaining:.1f} 分鐘")
+        # ── 持倉中：等待倉位到期平倉後才恢復掃描 ─────────────────────────────
+        with pos_manager.lock:
+            has_position = pos_manager.active_position is not None
+            pos_expiry   = (pos_manager.active_position or {}).get('expiry_timestamp')
+
+        if has_position:
+            remaining_sec = max(0, (pos_expiry / 1000) - time.time()) if pos_expiry else 0
+            logger.debug(f"📦 持倉中，等待到期（剩餘 {remaining_sec:.0f}s）")
             bot_state.update_scan_info({
-                'status':                'cooling_down',
-                'cooldown_remaining_min': round(remaining, 1),
+                'status':         'position_open',
+                'last_scan_time': time.time(),
             })
             return
 

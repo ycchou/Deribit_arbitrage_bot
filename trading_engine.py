@@ -12,7 +12,6 @@ Fix #1  交易互斥鎖由 scan_orchestrator 持有，進入此函式前已取�
 Fix #6  funding rate 在最終確認時同步更新到 dashboard
 Fix #8  下單失敗後記錄 last_failure_time，進入短暫冷卻
 Fix #9  執行前確認無活躍部位（由呼叫方在鎖內雙重確認）
-Fix #10 成交後立即持久化 last_trade_time
 """
 
 import logging
@@ -27,7 +26,6 @@ from notifications import (
     send_liquidity_issue_notification,
 )
 from bot_state import bot_state
-from state_store import save as save_state
 from global_state import global_state
 
 logger = logging.getLogger(__name__)
@@ -125,8 +123,6 @@ def perform_final_check_and_execute(
     # ── 執行交易 ──────────────────────────────────────────────────────────────
     result = trader.execute_arbitrage_strategy(final, required_amount)
     if result and result.get('success'):
-        global_state.last_trade_time = time.time()
-        save_state('last_trade_time', global_state.last_trade_time)   # Fix #10
         send_trade_execution_notification(final)
         pos_manager.add_position(
             expiry_timestamp=final['expiryTimestamp'],
