@@ -1,0 +1,93 @@
+# arbitrage_bot/profit_calculator.py
+
+"""
+純函數：計算套利策略的損益明細。
+無副作用，不依賴外部狀態，易於單元測試。
+"""
+
+from typing import Dict
+
+# 手續費費率常數
+OPTION_TAKER_FEE_RATE = 0.0003
+PERP_TAKER_FEE_RATE   = 0.0005
+
+
+def calculate_strategy(
+    strategy_type: str, strategy_name: str,
+    call_price: float, put_price: float,
+    perp_open_price: float, perp_close_price: float,
+    strike: float, perpetual_price: float,
+    funding_rate_24h: float, expiry_info: Dict,
+    call_instrument: str, put_instrument: str,
+    call_direction: str, put_direction: str, perp_direction: str,
+) -> Dict:
+    """
+    計算單一套利策略的詳細損益。
+    回傳包含 grossProfit, totalFees, fundingCost, netProfit, margin 的 dict。
+    """
+    contract_size = 1
+
+    option_premium_diff = call_price - put_price
+    perp_strike_diff    = (perp_open_price - strike) / perpetual_price
+
+    if strategy_type == 'A':
+        gross_profit = (option_premium_diff - perp_strike_diff) * perpetual_price
+    else:
+        gross_profit = (perp_strike_diff - option_premium_diff) * perpetual_price
+
+    # ── 手續費計算 ──────────────────────────────────────────────────────────────
+    call_notional      = call_price       * perpetual_price * contract_size
+    put_notional       = put_price        * perpetual_price * contract_size
+    perp_open_notional = perp_open_price  * contract_size
+    perp_close_notional= perp_close_price * contract_size
+
+    total_fees = (
+        call_notional       * OPTION_TAKER_FEE_RATE +
+        put_notional        * OPTION_TAKER_FEE_RATE +
+        perp_open_notional  * PERP_TAKER_FEE_RATE   +
+        perp_close_notional * PERP_TAKER_FEE_RATE
+    )
+
+    # ── 資金費率成本 ────────────────────────────────────────────────────────────
+    funding_cost_abs = perp_open_price * contract_size * abs(funding_rate_24h)
+
+    if perp_direction == 'long':
+        funding_direction = '支付' if funding_rate_24h >= 0 else '收入'
+        funding_cost = funding_cost_abs if funding_rate_24h >= 0 else -funding_cost_abs
+    else:
+        funding_direction = '收入' if funding_rate_24h >= 0 else '支付'
+        funding_cost = -funding_cost_abs if funding_rate_24h >= 0 else funding_cost_abs
+
+    net_profit = gross_profit - total_fees - funding_cost
+
+    # ── 保證金估算 ──────────────────────────────────────────────────────────────
+    call_value    = call_price * perpetual_price * contract_size
+    put_value     = put_price  * perpetual_price * contract_size
+    perp_value    = perpetual_price * contract_size
+    option_margin = max(call_value, put_value) * 0.15 + min(call_value, put_value)
+    perp_margin   = perp_value * 0.1
+    margin        = option_margin + perp_margin
+
+    return {
+        'strategyType': strategy_type,  'strategyName': strategy_name,
+        'strike': strike,
+        'expiryDate':      expiry_info['dateStr'],
+        'expiryFullDate':  expiry_info['fullDate'],
+        'expiryTimestamp': expiry_info['timestamp'],
+        'callInstrument':  call_instrument,
+        'putInstrument':   put_instrument,
+        'callPrice':       call_price,
+        'putPrice':        put_price,
+        'perpOpenPrice':   perp_open_price,
+        'perpClosePrice':  perp_close_price,
+        'callDirection':   call_direction,
+        'putDirection':    put_direction,
+        'perpDirection':   perp_direction,
+        'grossProfit':     gross_profit,
+        'totalFees':       total_fees,
+        'fundingCost':     abs(funding_cost),
+        'fundingDirection':funding_direction,
+        'netProfit':       net_profit,
+        'margin':          margin,
+        'fundingRate24h':  funding_rate_24h * 100,
+    }

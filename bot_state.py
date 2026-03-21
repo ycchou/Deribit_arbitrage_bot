@@ -52,6 +52,7 @@ class BotState:
         # ── History ──────────────────────────────────────────────────────────
         self.trade_history: deque = deque(maxlen=50)
         self.log_buffer: deque = deque(maxlen=200)
+        self.last_trade_time: float = 0.0
 
         # ── System metrics (sampled every ~60s, 24h window) ──────────────────
         self._cpu_history: deque = deque()  # (timestamp, pct)
@@ -97,9 +98,11 @@ class BotState:
         self._push({'type': 'active_position', 'position': position})
 
     def add_trade(self, trade: Dict) -> None:
-        entry = {**trade, 'time': time.strftime('%H:%M:%S')}
+        now = time.time()
+        entry = {**trade, 'time': time.strftime('%H:%M:%S'), 'timestamp': now}
         with self._lock:
             self.trade_history.append(entry)
+            self.last_trade_time = now
         self._push({'type': 'trade', 'trade': entry})
 
     def add_log(self, message: str, level: str = 'INFO') -> None:
@@ -138,6 +141,7 @@ class BotState:
                 'active_position': self.active_position,
                 'trade_history': list(self.trade_history),
                 'log_buffer': list(self.log_buffer),
+                'last_trade_time': self.last_trade_time,
                 'system': self.get_system_metrics(),
             }
 
