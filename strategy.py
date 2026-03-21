@@ -27,20 +27,28 @@ def check_arbitrage_opportunity(
     strike: float,
     expiry_info: Dict,
     ws_client: 'DeribitWebSocket',
+    perp_ticker: Optional[Dict] = None,
+    funding_rate_8h: Optional[float] = None,
 ) -> Optional[Dict]:
     """
     以 WebSocket 即時數據掃描指定履約價的套利機會。
+    perp_ticker 與 funding_rate_8h 可由呼叫方預取後傳入，避免重複加鎖。
     回傳 {'strike', 'strategyA', 'strategyB'} 或 None。
     """
     try:
         call_instrument = f"BTC-{expiry_info['dateStr']}-{int(strike)}-C"
         put_instrument  = f"BTC-{expiry_info['dateStr']}-{int(strike)}-P"
 
-        call_ticker      = ws_client.get_ticker(call_instrument)
-        put_ticker       = ws_client.get_ticker(put_instrument)
-        perpetual_ticker = ws_client.get_ticker('BTC-PERPETUAL')
+        # 一次加鎖取得 call + put（perp 由外部傳入時不再重複讀取）
+        tickers = ws_client.get_tickers([call_instrument, put_instrument])
+        call_ticker = tickers.get(call_instrument)
+        put_ticker  = tickers.get(put_instrument)
 
-        if not all([call_ticker, put_ticker, perpetual_ticker]):
+        # perp_ticker 由外部預取；若未傳入才自行取得
+        if perp_ticker is None:
+            perp_ticker = ws_client.get_ticker('BTC-PERPETUAL')
+
+        if not all([call_ticker, put_ticker, perp_ticker]):
             return None
 
         required_fields = [
@@ -49,14 +57,16 @@ def check_arbitrage_opportunity(
         ]
         if not all(
             f in ticker and ticker[f] is not None and ticker[f] > 0
-            for ticker in [call_ticker, put_ticker, perpetual_ticker]
+            for ticker in [call_ticker, put_ticker, perp_ticker]
             for f in required_fields
         ):
             return None
 
-        funding_rate_8h  = get_funding_rate(ws_client)
+        # funding_rate_8h 由外部預取；若未傳入才自行取得
+        if funding_rate_8h is None:
+            funding_rate_8h = get_funding_rate(ws_client)
         funding_rate_24h = funding_rate_8h * 3
-        perpetual_price  = perpetual_ticker['last_price']
+        perpetual_price  = perp_ticker['last_price']
 
         # ── 策略 A：賣 Call + 買 Put + 買 Perp ───────────────────────────────
         strategy_a = calculate_strategy(

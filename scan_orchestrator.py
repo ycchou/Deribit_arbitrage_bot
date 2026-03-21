@@ -15,7 +15,7 @@ import time
 from typing import Dict, List
 
 from config import Config
-from deribit_api import get_tomorrow_expiry, get_target_strikes
+from deribit_api import get_tomorrow_expiry, get_target_strikes, get_funding_rate
 from strategy import check_arbitrage_opportunity
 from bot_state import bot_state
 from global_state import global_state
@@ -59,13 +59,18 @@ def run_scan(ws_client, trader, pos_manager) -> None:
             })
             return
 
-        # ── 取得市場數據 ───────────────────────────────────────────────────────
+        # ── 取得市場數據（一次加鎖，供後續迴圈共用）──────────────────────────
         perp_ticker = ws_client.get_ticker('BTC-PERPETUAL')
         if not perp_ticker or not perp_ticker.get('last_price'):
             return
         bot_state.update_btc_price(perp_ticker['last_price'])
-        if 'funding_8h' in perp_ticker:   # Fix #6: 即時更新 funding rate
-            bot_state.update_funding_rate(perp_ticker['funding_8h'])
+
+        # 從已取得的 perp_ticker 直接讀取 funding rate，避免重複加鎖
+        funding_rate_8h = perp_ticker.get('funding_8h')
+        if funding_rate_8h is not None:
+            bot_state.update_funding_rate(funding_rate_8h)   # Fix #6
+        else:
+            funding_rate_8h = get_funding_rate(ws_client)    # fallback
 
         expiry_info = get_tomorrow_expiry()
         if not expiry_info:
@@ -92,10 +97,12 @@ def run_scan(ws_client, trader, pos_manager) -> None:
             if not ws_client.wait_for_data(instruments_needed, timeout=10):
                 logger.warning('⚠️ 部分數據未就緒，繼續執行')
 
-        # ── 掃描套利機會 ───────────────────────────────────────────────────────
+        # ── 掃描套利機會（傳入預取資料，避免每個 strike 重複加鎖）──────────
         all_opportunities: List[Dict] = []
         for strike in strikes:
-            result = check_arbitrage_opportunity(strike, expiry_info, ws_client)
+            result = check_arbitrage_opportunity(
+                strike, expiry_info, ws_client, perp_ticker, funding_rate_8h
+            )
             if result:
                 if result['strategyA'] and result['strategyA']['netProfit'] > Config.MIN_NET_PROFIT_OPPORTUNITY:
                     all_opportunities.append(result['strategyA'])

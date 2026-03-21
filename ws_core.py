@@ -85,6 +85,11 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
         with self.data_lock:
             return self.ticker_data.get(instrument_name)
 
+    def get_tickers(self, instrument_names: list) -> dict:
+        """一次取得多個合約的 ticker（單次加鎖，降低鎖競爭）。"""
+        with self.data_lock:
+            return {name: self.ticker_data.get(name) for name in instrument_names}
+
     def is_data_ready(self, instruments) -> bool:
         with self.data_lock:
             for inst in instruments:
