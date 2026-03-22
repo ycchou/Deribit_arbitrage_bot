@@ -47,8 +47,9 @@ def check_arbitrage_opportunity(
         # perp_ticker 由外部預取；若未傳入才自行取得
         if perp_ticker is None:
             perp_ticker = ws_client.get_ticker('BTC-PERPETUAL')
+        perpetual_ticker = perp_ticker  # alias for references below
 
-        if not all([call_ticker, put_ticker, perp_ticker]):
+        if not all([call_ticker, put_ticker, perpetual_ticker]):
             return None
 
         required_fields = [
