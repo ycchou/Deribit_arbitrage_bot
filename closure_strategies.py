@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from config import Config
 from bot_state import bot_state
 from state_store import save as save_state
+from notifications import send_position_closed_notification
 
 if TYPE_CHECKING:
     from position_manager import PositionManager
@@ -36,6 +37,7 @@ def manage_closure(manager: 'PositionManager', position: dict) -> None:
     # 已過期未平倉
     if time_to_expiry <= 0 and position['status'] != 'closed':
         logger.warning(f"⚠️ 部位已過期但未完成平倉，狀態: {position['status']}")
+        send_position_closed_notification(position, 'expired')
         with manager.lock:
             manager.active_position = None
         bot_state.update_active_position(None)
@@ -52,6 +54,7 @@ def manage_closure(manager: 'PositionManager', position: dict) -> None:
     elif position['status'] == 'closing_maker':
         if manager._maker_order_filled.wait(timeout=0):
             logger.info("✅ Maker 平倉已完成")
+            send_position_closed_notification(position, 'maker')
             with manager.lock:
                 manager.active_position = None
             manager._maker_order_filled.clear()
@@ -148,6 +151,7 @@ def _force_close_taker(manager: 'PositionManager', position: dict) -> None:
     else:
         logger.error(f"❌❌ Taker 強制平倉失敗: {result}")
 
+    send_position_closed_notification(position, 'taker')
     with manager.lock:
         manager.active_position = None
     bot_state.update_active_position(None)

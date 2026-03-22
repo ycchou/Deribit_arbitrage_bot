@@ -124,6 +124,43 @@ def send_startup_notification() -> bool:
     return _send_message(message)
 
 
+def send_position_closed_notification(position: Dict, close_method: str) -> bool:
+    """發送部位到期平倉通知，包含保證金使用與預估收益。"""
+    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
+
+    entry_time  = position.get('entry_time', 0)
+    duration_s  = int(datetime.utcnow().timestamp() - entry_time) if entry_time else 0
+    hours, rem  = divmod(duration_s, 3600)
+    minutes     = rem // 60
+
+    net_profit  = position.get('net_profit_est', 0.0)
+    margin      = position.get('margin_est', 0.0)
+    profit_icon = '🟢' if net_profit >= 0 else '🔴'
+
+    method_label = {
+        'maker':   '✅ Maker 限價單成交',
+        'taker':   '⚡️ Taker 強制平倉',
+        'expired': '⚠️ 已過期（未正常平倉）',
+    }.get(close_method, close_method)
+
+    message = f"""
+📦 *部位已平倉* 📦
+
+*平倉方式*: {method_label}
+*持倉時長*: {hours}h {minutes}m
+*平倉時間*: {timestamp}
+
+*財務摘要*:
+  • *使用保證金（估算）*: `${margin:.0f}`
+  • *預估淨收益*: {profit_icon} `${net_profit:.2f}`
+
+⚠️ _收益為開倉時預估值，實際損益以 Deribit 帳戶結算為準。_
+""".strip()
+
+    logger.info(f"發送平倉通知（{close_method}）")
+    return _send_message(message)
+
+
 def send_liquidity_issue_notification(opportunity: Dict) -> bool:
     """發送因流動性不足而放棄交易的通知"""
     timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S') + ' UTC'

@@ -127,6 +127,8 @@ def perform_final_check_and_execute(
         pos_manager.add_position(
             expiry_timestamp=final['expiryTimestamp'],
             amount=required_amount,
+            net_profit=final['netProfit'],
+            margin=final['margin'],
         )
         bot_state.add_trade(final)
         return True

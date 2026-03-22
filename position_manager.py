@@ -66,13 +66,17 @@ class PositionManager:
 
     # ── 新增部位 ────────────────────────────────────────────────────────────────
 
-    def add_position(self, expiry_timestamp: int, amount: float) -> None:
+    def add_position(self, expiry_timestamp: int, amount: float,
+                     net_profit: float = 0.0, margin: float = 0.0) -> None:
         pos = {
-            'instrument':       'BTC-PERPETUAL',
-            'amount':           amount,
-            'expiry_timestamp': expiry_timestamp,
-            'status':           'monitoring',
-            'maker_order_id':   None,
+            'instrument':        'BTC-PERPETUAL',
+            'amount':            amount,
+            'expiry_timestamp':  expiry_timestamp,
+            'status':            'monitoring',
+            'maker_order_id':    None,
+            'entry_time':        time.time(),
+            'net_profit_est':    net_profit,
+            'margin_est':        margin,
         }
         with self.lock:
             self.active_position = pos.copy()
