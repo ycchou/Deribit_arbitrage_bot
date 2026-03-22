@@ -5,7 +5,7 @@
 """
 import requests
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict
 
 from config import Config
@@ -81,9 +81,7 @@ _數據來源: WebSocket 實時訂閱_
 def send_trade_execution_notification(opportunity: Dict) -> bool:
     """發送成功執行交易的通知"""
     timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
-    cooldown_hours = Config.COOLDOWN_PERIOD_SECONDS / 3600
-    next_trade_time = (datetime.utcnow() + timedelta(seconds=Config.COOLDOWN_PERIOD_SECONDS)).strftime('%Y-%m-%d %H:%M')
-    
+
     message = f"""
 🚀 *套利交易已成功執行* 🚀
 
@@ -99,9 +97,7 @@ def send_trade_execution_notification(opportunity: Dict) -> bool:
 
 *狀態*:
   • *執行時間*: {timestamp}
-  • *後續操作*: 永續合約將在期權到期前自動平倉。
-  • *冷卻期*: 機器人已進入 **{cooldown_hours:.0f} 小時**冷卻期。
-  • *下次可交易時間*: `~{next_trade_time} UTC`
+  • *後續操作*: 永續合約將在期權到期前自動平倉，到期後恢復掃描。
 
 ✅ *交易已送出，請至 Deribit 後台確認成交狀態。*
 """.strip()

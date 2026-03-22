@@ -20,6 +20,11 @@ from strategy import check_arbitrage_opportunity
 from bot_state import bot_state
 from global_state import global_state
 from trading_engine import perform_final_check_and_execute
+from notifications import send_telegram_notification
+
+# 發現機會通知的冷卻計時（10 分鐘內同一機會不重複推送）
+_OPPORTUNITY_NOTIFY_COOLDOWN = 600   # 秒
+_last_opportunity_notify_time: float = 0.0
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +124,7 @@ def run_scan(ws_client, trader, pos_manager) -> None:
             return
 
         # ── 選出最佳機會 ───────────────────────────────────────────────────────
+        global _last_opportunity_notify_time
         best = max(all_opportunities, key=lambda x: x['netProfit'])
         logger.info(
             f"🏆 最佳機會: {best['strategyName']} @ ${best['strike']} "
@@ -132,6 +138,12 @@ def run_scan(ws_client, trader, pos_manager) -> None:
             'last_scan_time': time.time(),
             'expiry_date':    expiry_info['dateStr'],
         })
+
+        # ── 發現機會通知（10 分鐘冷卻，避免同一機會重複推送）──────────────
+        now = time.time()
+        if now - _last_opportunity_notify_time >= _OPPORTUNITY_NOTIFY_COOLDOWN:
+            _last_opportunity_notify_time = now
+            send_telegram_notification(best)
 
         # ── Fix #1: non-blocking 取得交易鎖 ───────────────────────────────────
         if not global_state._trade_lock.acquire(blocking=False):
