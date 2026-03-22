@@ -535,6 +535,7 @@ const S = {
   system: {},
   priceHistory: [],   // { t, v } last 80 BTC prices for sparkline
   startTime: null,
+  lastDataAt: 0,      // 前端收到任何 Server 資料的時間（ms）
 };
 
 // ── Log state ─────────────────────────────────────────────────────────────────
@@ -810,11 +811,11 @@ function renderScan() {
   $('scan-strategy').textContent = s.strategy_name || '—';
   $('scan-expiry').textContent   = s.expiry_date || '—';
 
-  // 顯示「X 秒前」相對時間
-  if (s.last_scan_time) {
-    const secsAgo = Math.round(Date.now() / 1000 - s.last_scan_time);
-    $('scan-time').textContent = secsAgo <= 1 ? '剛剛掃描' : `${secsAgo} 秒前掃描`;
-    $('scan-time').style.color = secsAgo > 10 ? 'var(--red)' : 'var(--muted)';
+  // 顯示「X 秒前收到資料」（用前端實際收到時間，不依賴 server 欄位）
+  if (S.lastDataAt) {
+    const secsAgo = Math.round((Date.now() - S.lastDataAt) / 1000);
+    $('scan-time').textContent = secsAgo <= 1 ? '資料即時' : `${secsAgo} 秒前更新`;
+    $('scan-time').style.color = secsAgo > 5 ? 'var(--red)' : 'var(--muted)';
   }
 }
 
@@ -1020,6 +1021,7 @@ function appendLog(e) {
 
 // ── Message handler ───────────────────────────────────────────────────────────
 function handle(msg) {
+  S.lastDataAt = Date.now();
   switch (msg.type) {
     case 'snapshot':
       S.btcPrice       = msg.btc_price;
