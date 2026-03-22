@@ -56,6 +56,7 @@ class BotState:
 
         # ── Scan state ───────────────────────────────────────────────────────
         self.scan_info: Dict = {}
+        self.scan_count: int = 0
 
         # ── Position ─────────────────────────────────────────────────────────
         self.active_position: Optional[Dict] = None

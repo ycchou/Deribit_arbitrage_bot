@@ -385,29 +385,29 @@
 
       <!-- Scanner Card -->
       <div class="card">
-        <div class="card-title"><span class="dot-accent"></span>Current Scan</div>
+        <div class="card-title"><span class="dot-accent"></span>套利掃描器</div>
         <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
           <span class="pill pill-muted" id="scan-pill">
             <span class="pill-dot blink" id="scan-dot"></span>
-            <span id="scan-status-text">Waiting…</span>
+            <span id="scan-status-text">等待中…</span>
           </span>
           <span style="font-size:11px; color:var(--muted)" id="scan-time"></span>
         </div>
         <div class="kv2">
           <div class="kv-item">
-            <div class="kv-label">Best Strike</div>
+            <div class="kv-label">最佳履約價</div>
             <div class="kv-val" id="scan-strike">—</div>
           </div>
           <div class="kv-item">
-            <div class="kv-label">Best Profit</div>
+            <div class="kv-label">預估最高利潤</div>
             <div class="kv-val" id="scan-profit">—</div>
           </div>
           <div class="kv-item" style="margin-top:4px">
-            <div class="kv-label">Strategy</div>
+            <div class="kv-label">策略類型</div>
             <div class="kv-val" id="scan-strategy">—</div>
           </div>
           <div class="kv-item" style="margin-top:4px">
-            <div class="kv-label">Target Expiry</div>
+            <div class="kv-label">目標到期日</div>
             <div class="kv-val" id="scan-expiry">—</div>
           </div>
         </div>
@@ -792,13 +792,13 @@ function renderScan() {
   if (!s || !Object.keys(s).length) return;
 
   const pillMap = {
-    position_open:     ['pill pill-blue',   'Position Open', false],
-    cooling_down:      ['pill pill-orange', 'Cooling Down',  false],
-    opportunity_found: ['pill pill-green',  'Opportunity!',  true],
-    scanning:          ['pill pill-yellow', 'Scanning',      true],
-    no_opportunity:    ['pill pill-muted',  'No Match',      false],
+    position_open:     ['pill pill-blue',   '持倉中，暫停掃描', false],
+    cooling_down:      ['pill pill-orange', '冷卻中…',         false],
+    opportunity_found: ['pill pill-green',  '發現機會！',       true],
+    scanning:          ['pill pill-yellow', '掃描中…',         true],
+    no_opportunity:    ['pill pill-green',  '掃描中，尚無機會', true],
   };
-  const [pillCls, pillTxt, blinking] = pillMap[s.status] || ['pill pill-muted', s.status || 'Waiting', false];
+  const [pillCls, pillTxt, blinking] = pillMap[s.status] || ['pill pill-muted', s.status || '等待中', false];
   $('scan-pill').className = pillCls;
   $('scan-status-text').textContent = pillTxt;
   $('scan-dot').className = 'pill-dot' + (blinking ? ' blink' : '');
@@ -809,8 +809,13 @@ function renderScan() {
   $('scan-profit').style.color   = p > 0 ? 'var(--green)' : p < 0 ? 'var(--red)' : 'var(--muted)';
   $('scan-strategy').textContent = s.strategy_name || '—';
   $('scan-expiry').textContent   = s.expiry_date || '—';
-  $('scan-time').textContent     = s.last_scan_time
-    ? new Date(s.last_scan_time * 1000).toLocaleTimeString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' }) : '';
+
+  // 顯示「X 秒前」相對時間
+  if (s.last_scan_time) {
+    const secsAgo = Math.round(Date.now() / 1000 - s.last_scan_time);
+    $('scan-time').textContent = secsAgo <= 1 ? '剛剛掃描' : `${secsAgo} 秒前掃描`;
+    $('scan-time').style.color = secsAgo > 10 ? 'var(--red)' : 'var(--muted)';
+  }
 }
 
 function renderPos() {
@@ -1100,6 +1105,7 @@ setInterval(() => {
   }
   if (S.activePos) renderPos();
   renderNextTrade();
+  if (S.scanInfo && S.scanInfo.last_scan_time) renderScan();
 }, 1000);
 
 // ── Refresh system metrics every 30s ──────────────────────────────────────────
