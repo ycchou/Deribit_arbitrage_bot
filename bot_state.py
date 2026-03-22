@@ -130,6 +130,7 @@ class BotState:
         }
 
     def get_snapshot(self) -> Dict:
+        system = self.get_system_metrics()  # 在取鎖前呼叫，避免 Lock 重入死鎖
         with self._lock:
             return {
                 'type': 'snapshot',
@@ -142,7 +143,7 @@ class BotState:
                 'trade_history': list(self.trade_history),
                 'log_buffer': list(self.log_buffer),
                 'last_trade_time': self.last_trade_time,
-                'system': self.get_system_metrics(),
+                'system': system,
             }
 
     # ── Internal ──────────────────────────────────────────────────────────────
