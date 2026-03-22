@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Deribit Arb Bot</title>
+  <title>Deribit 套利機器人</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <style>
     /* ── Binance Design Tokens ── */
@@ -75,6 +75,7 @@
     .conn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); flex-shrink: 0; }
     .conn-dot.on { background: var(--green); animation: pulse 2s ease-in-out infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+    @keyframes price-tick { 0%{transform:scale(1)} 30%{transform:scale(1.06)} 100%{transform:scale(1)} }
 
     .header-right {
       margin-left: auto;
@@ -155,6 +156,7 @@
     .pill-muted  { background: rgba(132,142,156,.1); color: var(--muted);  border: 1px solid rgba(132,142,156,.2); }
     .pill-dot    { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
     .pill-dot.blink { animation: pulse 1s ease-in-out infinite; }
+    .price-tick { animation: price-tick 0.35s ease-out; }
 
     /* ── Two-column KV ── */
     .kv2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -291,8 +293,8 @@
   <div class="logo">
     <div class="logo-icon">A</div>
     <div>
-      <div class="logo-name">Arb Bot</div>
-      <div class="logo-sub">Deribit Options</div>
+      <div class="logo-name">套利機器人</div>
+      <div class="logo-sub">Deribit Options Arb</div>
     </div>
   </div>
 
@@ -300,7 +302,7 @@
   <div id="net-badge" class="badge badge-testnet">TESTNET</div>
 
   <div class="header-right">
-    <span id="conn-label" style="color:var(--red)">Connecting…</span>
+    <span id="conn-label" style="color:var(--red)">連線中…</span>
     <span class="header-clock" id="clock">--:--:--</span>
   </div>
 </div>
@@ -312,26 +314,26 @@
 
     <!-- BTC Price + Sparkline -->
     <div class="card btc-card" id="btc-card">
-      <div class="metric-label">BTC / USD</div>
+      <div class="metric-label">BTC / USD 永續合約</div>
       <div class="metric-val c-yellow" id="btc-price">—</div>
-      <div class="metric-sub" id="btc-change">Perpetual</div>
+      <div class="metric-sub" id="btc-change">即時價格</div>
       <canvas class="sparkline" id="spark-canvas" height="40"></canvas>
     </div>
 
     <!-- Funding Rate -->
     <div class="card">
-      <div class="metric-label">Funding Rate (8h)</div>
+      <div class="metric-label">資金費率 Funding Rate (8h)</div>
       <div class="metric-val" id="funding-val">—</div>
-      <div class="metric-sub" id="funding-sub">Per 8-hour period</div>
+      <div class="metric-sub" id="funding-sub">每 8 小時結算一次</div>
     </div>
 
     <!-- WS Status -->
     <div class="card">
-      <div class="metric-label">Deribit WebSocket</div>
+      <div class="metric-label">交易所連線 WebSocket</div>
       <div style="margin: 8px 0 6px; display:flex; gap:8px; align-items:center;">
         <span class="pill pill-muted" id="ws-pill">
           <span class="pill-dot" id="ws-pill-dot"></span>
-          <span id="ws-pill-text">Disconnected</span>
+          <span id="ws-pill-text">未連線</span>
         </span>
       </div>
       <div class="metric-sub" id="ws-sub">—</div>
@@ -339,37 +341,37 @@
 
     <!-- Uptime -->
     <div class="card">
-      <div class="metric-label">Bot Uptime</div>
+      <div class="metric-label">機器人運行時間 Uptime</div>
       <div class="metric-val c-muted" id="uptime">—</div>
-      <div class="metric-sub" id="uptime-date">Started: —</div>
+      <div class="metric-sub" id="uptime-date">啟動：—</div>
     </div>
 
   </div>
 
   <!-- ── Row 2: Performance KPIs ── -->
-  <div class="section-label">Performance</div>
+  <div class="section-label">績效 Performance</div>
   <div class="g4">
 
     <div class="card">
-      <div class="metric-label">Total Trades</div>
+      <div class="metric-label">總交易次數</div>
       <div class="metric-val" id="kpi-trades">0</div>
-      <div class="metric-sub">All time</div>
+      <div class="metric-sub">累計</div>
     </div>
 
     <div class="card">
-      <div class="metric-label">Cumulative Net P&amp;L</div>
+      <div class="metric-label">累計淨損益 Net P&amp;L</div>
       <div class="metric-val" id="kpi-pnl">$0.00</div>
       <div class="metric-sub" id="kpi-pnl-sub">—</div>
     </div>
 
     <div class="card">
-      <div class="metric-label">Win Rate</div>
+      <div class="metric-label">勝率 Win Rate</div>
       <div class="metric-val" id="kpi-winrate">—</div>
       <div class="metric-sub" id="kpi-winrate-sub">—</div>
     </div>
 
     <div class="card">
-      <div class="metric-label" id="next-label">Next Trade</div>
+      <div class="metric-label" id="next-label">下次交易</div>
       <div class="metric-val sm" id="kpi-next">—</div>
       <div class="metric-sub" id="kpi-next-sub">—</div>
     </div>
@@ -377,7 +379,7 @@
   </div>
 
   <!-- ── Row 3: Scanner + Position  |  P&L Chart ── -->
-  <div class="section-label">Trading</div>
+  <div class="section-label">交易 Trading</div>
   <div class="g2-3">
 
     <!-- Left: Scanner + Position stacked -->
@@ -415,9 +417,9 @@
 
       <!-- Active Position Card -->
       <div class="card">
-        <div class="card-title"><span class="dot-accent"></span>Active Position</div>
+        <div class="card-title"><span class="dot-accent"></span>目前持倉 Active Position</div>
         <div id="pos-content">
-          <div class="no-pos">No active position</div>
+          <div class="no-pos">目前無持倉</div>
         </div>
       </div>
 
@@ -425,28 +427,28 @@
 
     <!-- Right: P&L Chart -->
     <div class="card">
-      <div class="card-title"><span class="dot-accent"></span>Cumulative P&amp;L</div>
+      <div class="card-title"><span class="dot-accent"></span>累計損益 Cumulative P&amp;L</div>
       <div class="chart-wrap">
         <canvas id="pnl-chart"></canvas>
       </div>
       <div style="display:flex; gap:16px; margin-top:10px; font-size:11px; color:var(--muted);">
-        <span>Avg / trade: <b class="c-text" id="chart-avg">—</b></span>
-        <span>Best: <b class="c-green" id="chart-best">—</b></span>
-        <span>Worst: <b class="c-red"  id="chart-worst">—</b></span>
+        <span>每筆平均：<b class="c-text" id="chart-avg">—</b></span>
+        <span>最佳：<b class="c-green" id="chart-best">—</b></span>
+        <span>最差：<b class="c-red"  id="chart-worst">—</b></span>
       </div>
     </div>
 
   </div>
 
   <!-- ── Row 4: System Health ── -->
-  <div class="section-label">System Health</div>
+  <div class="section-label">系統狀態 System Health</div>
   <div class="g2">
 
     <div class="card">
-      <div class="card-title"><span class="dot-accent"></span>CPU</div>
+      <div class="card-title"><span class="dot-accent"></span>CPU 處理器</div>
       <div class="gauge-row">
         <div class="gauge-item">
-          <div class="gauge-label">Current</div>
+          <div class="gauge-label">當前</div>
           <div class="gauge-bar-wrap">
             <div class="gauge-bar" id="cpu-bar" style="width:0%;background:var(--green)"></div>
             <div class="gauge-peak-line" id="cpu-peak-line" style="left:0%"></div>
@@ -454,7 +456,7 @@
           <div class="gauge-val" id="cpu-val">—</div>
         </div>
         <div class="gauge-item">
-          <div class="gauge-label">24h Peak</div>
+          <div class="gauge-label">24h 峰值</div>
           <div class="gauge-bar-wrap">
             <div class="gauge-bar" id="cpu-peak-bar" style="width:0%;background:var(--muted)"></div>
           </div>
@@ -464,10 +466,10 @@
     </div>
 
     <div class="card">
-      <div class="card-title"><span class="dot-accent"></span>RAM</div>
+      <div class="card-title"><span class="dot-accent"></span>RAM 記憶體</div>
       <div class="gauge-row">
         <div class="gauge-item">
-          <div class="gauge-label">Current</div>
+          <div class="gauge-label">當前</div>
           <div class="gauge-bar-wrap">
             <div class="gauge-bar" id="ram-bar" style="width:0%;background:var(--green)"></div>
             <div class="gauge-peak-line" id="ram-peak-line" style="left:0%"></div>
@@ -475,7 +477,7 @@
           <div class="gauge-val" id="ram-val">—</div>
         </div>
         <div class="gauge-item">
-          <div class="gauge-label">24h Peak</div>
+          <div class="gauge-label">24h 峰值</div>
           <div class="gauge-bar-wrap">
             <div class="gauge-bar" id="ram-peak-bar" style="width:0%;background:var(--muted)"></div>
           </div>
@@ -487,16 +489,16 @@
   </div>
 
   <!-- ── Row 5: Trade History ── -->
-  <div class="section-label">Trade History</div>
+  <div class="section-label">交易紀錄 Trade History</div>
   <div class="card">
     <div id="tbl-summary" class="tbl-summary" style="display:none">
-      <span>Trades <b id="sum-count">0</b></span>
-      <span>Total P&amp;L <b id="sum-pnl">$0.00</b></span>
-      <span>Avg <b id="sum-avg">—</b></span>
+      <span>交易 <b id="sum-count">0</b> 筆</span>
+      <span>總損益 <b id="sum-pnl">$0.00</b></span>
+      <span>平均 <b id="sum-avg">—</b></span>
     </div>
     <div class="tbl-wrap">
       <div id="trade-table-wrap">
-        <div class="tbl-empty">No trades recorded yet</div>
+        <div class="tbl-empty">尚無交易紀錄</div>
       </div>
     </div>
   </div>
@@ -716,15 +718,15 @@ function renderWs() {
   if (S.wsConn) {
     pill.className = 'pill pill-green';
     dot.className  = 'pill-dot blink';
-    txt.textContent = 'Connected';
+    txt.textContent = '已連線';
     const sub = $('ws-sub');
-    sub.textContent = S.wsAuth ? '✓ Authenticated' : '⚠ Pending Auth';
+    sub.textContent = S.wsAuth ? '✓ 已認證' : '⚠ 認證中…';
     sub.style.color = S.wsAuth ? 'var(--green)' : 'var(--orange)';
   } else {
     pill.className = 'pill pill-red';
     dot.className  = 'pill-dot';
-    txt.textContent = 'Disconnected';
-    $('ws-sub').textContent = 'Reconnecting…';
+    txt.textContent = '未連線';
+    $('ws-sub').textContent = '重新連線中…';
     $('ws-sub').style.color = 'var(--red)';
   }
 }
@@ -733,13 +735,19 @@ function renderBtc(price) {
   if (!price) return;
   const el = $('btc-price');
   el.textContent = fmtPrice(price);
-  // Flash color on change
+  // Flash color + pulse animation on every update
+  const up = price >= S.prevBtcPrice;
+  el.style.color = price !== S.prevBtcPrice
+    ? (up ? 'var(--green)' : 'var(--red)')
+    : 'var(--yellow)';
+  el.classList.remove('price-tick');
+  void el.offsetWidth; // force reflow to restart animation
+  el.classList.add('price-tick');
+  setTimeout(() => { el.style.color = 'var(--yellow)'; el.classList.remove('price-tick'); }, 400);
   if (S.prevBtcPrice && price !== S.prevBtcPrice) {
-    el.style.color = price > S.prevBtcPrice ? 'var(--green)' : 'var(--red)';
-    setTimeout(() => el.style.color = 'var(--yellow)', 600);
     const chg = ((price - S.prevBtcPrice) / S.prevBtcPrice * 100).toFixed(3);
-    $('btc-change').innerHTML = `<span style="color:${price>S.prevBtcPrice?'var(--green)':'var(--red)'}">
-      ${price>S.prevBtcPrice?'▲':'▼'} ${chg}%</span> vs prev`;
+    $('btc-change').innerHTML = `<span style="color:${up?'var(--green)':'var(--red)'}">
+      ${up?'▲':'▼'} ${chg}%</span> vs prev`;
   }
   S.prevBtcPrice = price;
   // Push to sparkline
@@ -766,7 +774,7 @@ function renderSystem() {
     $('uptime').textContent = fmtUptime(sys.uptime_seconds);
     if (S.startTime == null) {
       const d = new Date(Date.now() - sys.uptime_seconds * 1000);
-      $('uptime-date').textContent = 'Started: ' + d.toLocaleTimeString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' });
+      $('uptime-date').textContent = '啟動：' + d.toLocaleTimeString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' });
     }
   }
 
@@ -811,12 +819,7 @@ function renderScan() {
   $('scan-strategy').textContent = s.strategy_name || '—';
   $('scan-expiry').textContent   = s.expiry_date || '—';
 
-  // 顯示「X 秒前收到資料」（用前端實際收到時間，不依賴 server 欄位）
-  if (S.lastDataAt) {
-    const secsAgo = Math.round((Date.now() - S.lastDataAt) / 1000);
-    $('scan-time').textContent = secsAgo <= 1 ? '資料即時' : `${secsAgo} 秒前更新`;
-    $('scan-time').style.color = secsAgo > 5 ? 'var(--red)' : 'var(--muted)';
-  }
+  $('scan-time').textContent = '';
 }
 
 function renderPos() {
@@ -894,42 +897,42 @@ function renderKpis() {
 
   $('kpi-pnl').textContent = (total >= 0 ? '+' : '') + '$' + Math.abs(total).toFixed(2);
   $('kpi-pnl').className   = 'metric-val ' + (total >= 0 ? 'c-green' : 'c-red');
-  $('kpi-pnl-sub').textContent = 'Avg $' + (total/count).toFixed(2) + ' / trade';
+  $('kpi-pnl-sub').textContent = '每筆平均 $' + (total/count).toFixed(2);
 
   $('kpi-winrate').textContent = winRate + '%';
   $('kpi-winrate').className   = 'metric-val ' + (parseFloat(winRate) >= 50 ? 'c-green' : 'c-red');
-  $('kpi-winrate-sub').textContent = wins + ' win / ' + (count - wins) + ' loss';
+  $('kpi-winrate-sub').textContent = wins + ' 勝 / ' + (count - wins) + ' 敗';
 }
 
 function renderNextTrade() {
   // Position-based cooldown: bot waits until active position expires
   if (S.activePos) {
     const cd = countdown(S.activePos.expiry_timestamp);
-    $('next-label').textContent = 'Next Trade In';
+    $('next-label').textContent = '距下次交易';
     $('kpi-next').textContent = cd.text;
     $('kpi-next').className   = 'metric-val sm ' + (cd.cls === 'cd-fire' ? 'c-red' : cd.cls === 'cd-warn' ? 'c-orange' : 'c-blue');
-    $('kpi-next-sub').textContent = 'Holding position…';
+    $('kpi-next-sub').textContent = '持倉中…';
     return;
   }
   if (S.scanInfo.status === 'cooling_down') {
     const rem = S.scanInfo.cooldown_remaining_min;
-    $('next-label').textContent = 'Next Trade In';
+    $('next-label').textContent = '距下次交易';
     $('kpi-next').textContent = rem != null ? fmtCountdown(Math.round(rem * 60)) : '…';
     $('kpi-next').className   = 'metric-val sm c-orange';
-    $('kpi-next-sub').textContent = 'Failure cooldown…';
+    $('kpi-next-sub').textContent = '失敗冷卻中…';
     return;
   }
-  $('next-label').textContent = 'Next Trade';
-  $('kpi-next').textContent = 'Ready';
+  $('next-label').textContent = '下次交易';
+  $('kpi-next').textContent = '就緒';
   $('kpi-next').className   = 'metric-val sm c-green';
-  $('kpi-next-sub').textContent = 'Watching for opportunity';
+  $('kpi-next-sub').textContent = '監控市場中';
 }
 
 function renderTrades() {
   const div = $('trade-table-wrap');
   const summary = $('tbl-summary');
   if (!S.trades.length) {
-    div.innerHTML = '<div class="tbl-empty">No trades recorded yet</div>';
+    div.innerHTML = '<div class="tbl-empty">尚無交易紀錄</div>';
     summary.style.display = 'none';
     return;
   }
@@ -962,7 +965,7 @@ function renderTrades() {
 
   div.innerHTML = `<table>
     <thead><tr>
-      <th>Time</th><th>Type</th><th>Strategy</th><th>Strike</th><th>Expiry</th><th>Net P&amp;L</th>
+      <th>時間</th><th>類型</th><th>策略 Strategy</th><th>履約價 Strike</th><th>到期日 Expiry</th><th>淨損益 P&amp;L</th>
     </tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
@@ -979,7 +982,7 @@ function setLogFilter(level, btn) {
 function togglePause() {
   logPaused = !logPaused;
   const btn = $('pause-btn');
-  btn.textContent = logPaused ? '▶ Resume' : '⏸ Pause';
+  btn.textContent = logPaused ? '▶ 繼續' : '⏸ 暫停';
   btn.className   = 'pause-btn' + (logPaused ? ' paused' : '');
 }
 
@@ -1128,7 +1131,7 @@ function connect() {
 
   ws.onopen = () => {
     $('conn-dot').classList.add('on');
-    $('conn-label').textContent = 'Dashboard connected';
+    $('conn-label').textContent = '儀表板已連線';
     $('conn-label').style.color = 'var(--green)';
     reconnDelay = 1000;
     pingTimer = setInterval(() => ws.readyState === 1 && ws.send('ping'), 25000);
@@ -1139,7 +1142,7 @@ function connect() {
   ws.onclose = () => {
     clearInterval(pingTimer);
     $('conn-dot').classList.remove('on');
-    $('conn-label').textContent = `Reconnecting in ${reconnDelay/1000}s…`;
+    $('conn-label').textContent = `${reconnDelay/1000} 秒後重新連線…`;
     $('conn-label').style.color = 'var(--red)';
     setTimeout(connect, reconnDelay);
     reconnDelay = Math.min(reconnDelay * 2, 30000);
