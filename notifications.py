@@ -5,8 +5,14 @@
 """
 import requests
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Dict
+
+_TZ_TAIPEI = timezone(timedelta(hours=8))
+
+def _now_tw() -> datetime:
+    """回傳目前 UTC+8 時間。"""
+    return datetime.now(_TZ_TAIPEI)
 
 from config import Config
 
@@ -40,7 +46,7 @@ def _send_message(message: str) -> bool:
 
 def send_telegram_notification(opportunity: Dict) -> bool:
     """格式化套利機會訊息並透過 Telegram Bot 發送（用於一般監控）"""
-    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
+    timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
     
     call_action = '賣出' if opportunity['callDirection'] == 'sell' else '買入'
     put_action = '賣出' if opportunity['putDirection'] == 'sell' else '買入'
@@ -80,7 +86,7 @@ _數據來源: WebSocket 實時訂閱_
 
 def send_trade_execution_notification(opportunity: Dict) -> bool:
     """發送成功執行交易的通知"""
-    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
+    timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
 
     message = f"""
 🚀 *套利交易已成功執行* 🚀
@@ -107,9 +113,8 @@ def send_trade_execution_notification(opportunity: Dict) -> bool:
 
 def send_startup_notification() -> bool:
     """發送機器人啟動通知"""
-    from datetime import datetime
     env = "🧪 Testnet" if Config.USE_TESTNET else "🔴 Mainnet"
-    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
+    timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
     message = f"""
 🤖 *Deribit 套利機器人已啟動*
 
@@ -126,7 +131,7 @@ def send_startup_notification() -> bool:
 
 def send_position_closed_notification(position: Dict, close_method: str) -> bool:
     """發送部位到期平倉通知，包含保證金使用與預估收益。"""
-    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
+    timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
 
     entry_time  = position.get('entry_time', 0)
     duration_s  = int(datetime.utcnow().timestamp() - entry_time) if entry_time else 0
@@ -163,7 +168,7 @@ def send_position_closed_notification(position: Dict, close_method: str) -> bool
 
 def send_liquidity_issue_notification(opportunity: Dict) -> bool:
     """發送因流動性不足而放棄交易的通知"""
-    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
+    timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
     
     message = f"""
 ⚠️ *放棄交易：流動性不足* ⚠️

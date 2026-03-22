@@ -765,7 +765,7 @@ function renderSystem() {
     $('uptime').textContent = fmtUptime(sys.uptime_seconds);
     if (S.startTime == null) {
       const d = new Date(Date.now() - sys.uptime_seconds * 1000);
-      $('uptime-date').textContent = 'Started: ' + d.toLocaleTimeString();
+      $('uptime-date').textContent = 'Started: ' + d.toLocaleTimeString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' });
     }
   }
 
@@ -810,7 +810,7 @@ function renderScan() {
   $('scan-strategy').textContent = s.strategy_name || '—';
   $('scan-expiry').textContent   = s.expiry_date || '—';
   $('scan-time').textContent     = s.last_scan_time
-    ? new Date(s.last_scan_time * 1000).toLocaleTimeString() : '';
+    ? new Date(s.last_scan_time * 1000).toLocaleTimeString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' }) : '';
 }
 
 function renderPos() {
@@ -821,7 +821,7 @@ function renderPos() {
   }
   const pos = S.activePos;
   const cd  = countdown(pos.expiry_timestamp);
-  const expStr = new Date(pos.expiry_timestamp).toLocaleString();
+  const expStr = new Date(pos.expiry_timestamp).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
 
   // Time progress bar
   const totalDuration = 28 * 3600 * 1000; // approx, actual from entry
@@ -1088,7 +1088,7 @@ function handle(msg) {
 
 // ── Clock ─────────────────────────────────────────────────────────────────────
 function updateClock() {
-  $('clock').textContent = new Date().toLocaleTimeString('en-US', { hour12: false });
+  $('clock').textContent = new Date().toLocaleTimeString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' });
 }
 
 // ── Tick every second ─────────────────────────────────────────────────────────

@@ -8,8 +8,14 @@ import time
 import logging
 import threading
 import psutil
+from datetime import datetime, timezone, timedelta
 from collections import deque
 from typing import Optional, Dict, List, Callable
+
+_TZ_TAIPEI = timezone(timedelta(hours=8))
+
+def _tw_time() -> str:
+    return datetime.now(_TZ_TAIPEI).strftime('%H:%M:%S')
 
 logger = logging.getLogger(__name__)
 
@@ -99,14 +105,14 @@ class BotState:
 
     def add_trade(self, trade: Dict) -> None:
         now = time.time()
-        entry = {**trade, 'time': time.strftime('%H:%M:%S'), 'timestamp': now}
+        entry = {**trade, 'time': _tw_time(), 'timestamp': now}
         with self._lock:
             self.trade_history.append(entry)
             self.last_trade_time = now
         self._push({'type': 'trade', 'trade': entry})
 
     def add_log(self, message: str, level: str = 'INFO') -> None:
-        entry = {'time': time.strftime('%H:%M:%S'), 'level': level, 'message': message}
+        entry = {'time': _tw_time(), 'level': level, 'message': message}
         with self._lock:
             self.log_buffer.append(entry)
         self._push({'type': 'log', **entry})
