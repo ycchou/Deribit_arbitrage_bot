@@ -115,7 +115,7 @@ def run_scan(ws_client, trader, pos_manager) -> None:
                     all_opportunities.append(result['strategyB'])
 
         if not all_opportunities:
-            logger.info(f'📊 未發現高利潤機會 (> ${Config.MIN_NET_PROFIT_OPPORTUNITY})')
+            logger.debug(f'📊 未發現高利潤機會 (> ${Config.MIN_NET_PROFIT_OPPORTUNITY})')
             bot_state.update_scan_info({
                 'status':         'no_opportunity',
                 'last_scan_time': time.time(),

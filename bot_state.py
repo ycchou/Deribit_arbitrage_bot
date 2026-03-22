@@ -41,6 +41,11 @@ class BotState:
         self._lock = threading.Lock()
         self.start_time = time.time()
 
+        # ── Broadcast throttle（高頻資料最多每秒推一次）─────────────────────
+        self._last_price_push: float = 0.0
+        self._last_scan_push: float = 0.0
+        self._PUSH_INTERVAL: float = 1.0
+
         # ── Market data ──────────────────────────────────────────────────────
         self.btc_price: float = 0.0
         self.funding_rate: float = 0.0
@@ -78,9 +83,14 @@ class BotState:
     # ── Update Methods ────────────────────────────────────────────────────────
 
     def update_btc_price(self, price: float) -> None:
+        now = time.time()
         with self._lock:
             self.btc_price = price
-        self._push({'type': 'btc_price', 'value': price})
+            should_push = now - self._last_price_push >= self._PUSH_INTERVAL
+            if should_push:
+                self._last_price_push = now
+        if should_push:
+            self._push({'type': 'btc_price', 'value': price})
 
     def update_funding_rate(self, rate: float) -> None:
         with self._lock:
@@ -94,9 +104,14 @@ class BotState:
         self._push({'type': 'ws_status', 'connected': connected, 'authenticated': authenticated})
 
     def update_scan_info(self, info: Dict) -> None:
+        now = time.time()
         with self._lock:
             self.scan_info = info
-        self._push({'type': 'scan_info', 'data': info})
+            should_push = now - self._last_scan_push >= self._PUSH_INTERVAL
+            if should_push:
+                self._last_scan_push = now
+        if should_push:
+            self._push({'type': 'scan_info', 'data': info})
 
     def update_active_position(self, position: Optional[Dict]) -> None:
         with self._lock:
