@@ -536,7 +536,6 @@ const S = {
   trades: [],
   system: {},
   priceHistory: [],   // { t, v } last 80 BTC prices for sparkline
-  startTime: null,
   lastDataAt: 0,      // 前端收到任何 Server 資料的時間（ms）
 };
 
@@ -772,10 +771,8 @@ function renderSystem() {
   if (!sys) return;
   if (sys.uptime_seconds != null) {
     $('uptime').textContent = fmtUptime(sys.uptime_seconds);
-    if (S.startTime == null) {
-      const d = new Date(Date.now() - sys.uptime_seconds * 1000);
-      $('uptime-date').textContent = '啟動：' + d.toLocaleTimeString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' });
-    }
+    const startTime = new Date(Date.now() - sys.uptime_seconds * 1000);
+    $('uptime-date').textContent = '啟動：' + startTime.toLocaleTimeString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' });
   }
 
   function setGauge(barId, peakLineId, peakBarId, valId, peakValId, cur, peak) {
@@ -819,13 +816,18 @@ function renderScan() {
   $('scan-strategy').textContent = s.strategy_name || '—';
   $('scan-expiry').textContent   = s.expiry_date || '—';
 
-  $('scan-time').textContent = '';
+  if (s.last_scan_time) {
+    const d = new Date(s.last_scan_time * 1000);
+    $('scan-time').textContent = '上次掃描：' + d.toLocaleTimeString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' });
+  } else {
+    $('scan-time').textContent = '';
+  }
 }
 
 function renderPos() {
   const div = $('pos-content');
   if (!S.activePos) {
-    div.innerHTML = '<div class="no-pos">No active position</div>';
+    div.innerHTML = '<div class="no-pos">目前無持倉</div>';
     return;
   }
   const pos = S.activePos;
@@ -833,7 +835,7 @@ function renderPos() {
   const expStr = new Date(pos.expiry_timestamp).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
 
   // Time progress bar
-  const totalDuration = 28 * 3600 * 1000; // approx, actual from entry
+  const totalDuration = 28 * 3600 * 1000;
   const remaining = Math.max(0, pos.expiry_timestamp - Date.now());
   const progPct = Math.max(0, Math.min(100, (1 - remaining / totalDuration) * 100));
   const progColor = remaining < 60000 ? 'var(--red)' : remaining < 600000 ? 'var(--orange)' : 'var(--green)';
@@ -845,25 +847,42 @@ function renderPos() {
   };
   const pillCls = statusPillMap[pos.status] || 'pill pill-muted';
 
+  const strategyLine = pos.strategy_name
+    ? `<div class="kv-item"><div class="kv-label">策略</div><div class="kv-val c-accent">${esc(pos.strategy_name)}${pos.strike ? ' @ $' + pos.strike.toLocaleString() : ''}</div></div>`
+    : '';
+  const callLine = pos.call_instrument
+    ? `<div class="kv-item"><div class="kv-label">Call</div><div class="kv-val" style="font-size:11px">${esc(pos.call_instrument)}</div></div>`
+    : '';
+  const putLine = pos.put_instrument
+    ? `<div class="kv-item"><div class="kv-label">Put</div><div class="kv-val" style="font-size:11px">${esc(pos.put_instrument)}</div></div>`
+    : '';
+  const profitLine = pos.net_profit_est != null
+    ? `<div class="kv-item"><div class="kv-label">預估淨利</div><div class="kv-val c-green">$${(+pos.net_profit_est).toFixed(2)}</div></div>`
+    : '';
+  const marginLine = pos.margin_est
+    ? `<div class="kv-item"><div class="kv-label">保證金</div><div class="kv-val c-yellow">$${Math.round(pos.margin_est).toLocaleString()}</div></div>`
+    : '';
+
   div.innerHTML = `
     <div style="margin-bottom:8px">
-      <div class="kv-label">Expires In</div>
+      <div class="kv-label">距到期</div>
       <div class="countdown ${cd.cls}">${cd.text}</div>
       <div class="prog-wrap">
         <div class="prog-fill" style="width:${progPct}%;background:${progColor}"></div>
       </div>
     </div>
     <div class="kv2" style="margin-top:12px">
+      ${strategyLine}
+      ${callLine}
+      ${putLine}
       <div class="kv-item">
-        <div class="kv-label">Instrument</div>
-        <div class="kv-val">${esc(pos.instrument || 'BTC-PERPETUAL')}</div>
-      </div>
-      <div class="kv-item">
-        <div class="kv-label">Amount</div>
+        <div class="kv-label">部位量</div>
         <div class="kv-val c-yellow">${pos.amount} BTC</div>
       </div>
+      ${profitLine}
+      ${marginLine}
       <div class="kv-item" style="margin-top:6px">
-        <div class="kv-label">Status</div>
+        <div class="kv-label">狀態</div>
         <div class="kv-val">
           <span class="${pillCls}">
             <span class="pill-dot"></span>
@@ -872,7 +891,7 @@ function renderPos() {
         </div>
       </div>
       <div class="kv-item" style="margin-top:6px">
-        <div class="kv-label">Expiry</div>
+        <div class="kv-label">到期時間</div>
         <div class="kv-val" style="font-size:11px;line-height:1.5">${expStr}</div>
       </div>
     </div>`;
