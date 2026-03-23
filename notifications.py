@@ -196,6 +196,33 @@ _偵測時間: {timestamp}_
     return _send_message(message)
 
 
+# ── B3: 執行失敗通知 ─────────────────────────────────────────────────────────────
+
+def send_execution_failed_notification(strategy: dict, reason: str) -> bool:
+    """三腿下單後因超時或 API 拒絕而失敗時，發送 Telegram 通知。"""
+    timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
+    reason_label = {
+        'timeout':      '⏰ 成交超時（部分腿未在規定時間內成交）',
+        'api_rejected': '🚫 API 拒絕（部分腿下單被交易所拒絕）',
+    }.get(reason, reason)
+    message = f"""
+⚠️ *套利執行失敗* ⚠️
+
+機器人嘗試執行以下套利交易，但未能完成，已自動撤單並緊急平倉。
+
+*策略*: {strategy.get('strategyName', 'N/A')}
+*履約價*: `${strategy.get('strike', 'N/A')}`
+*到期日*: {strategy.get('expiryDate', 'N/A')}
+*預估淨利*: `${strategy.get('netProfit', 0):.2f}`
+
+*失敗原因*: {reason_label}
+
+_時間: {timestamp}_
+""".strip()
+    logger.warning(f"⚠️ 執行失敗通知: {reason}")
+    return _send_message(message)
+
+
 # ── A1: 緊急平倉失敗 ─────────────────────────────────────────────────────────────
 
 def send_emergency_close_failed_notification(instrument: str, size: float, direction: str) -> bool:

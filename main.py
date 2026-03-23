@@ -26,12 +26,9 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
-    setup_logging()
-
-    # 讓所有 log 同時推送到 live dashboard
     log_handler = BotStateLogHandler(bot_state)
     log_handler.setLevel(logging.INFO)
-    logging.getLogger().addHandler(log_handler)
+    setup_logging(extra_handlers=[log_handler])
 
     logger.info('🤖 Deribit 套利機器人啟動')
 

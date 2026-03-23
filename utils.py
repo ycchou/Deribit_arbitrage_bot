@@ -5,9 +5,20 @@
 """
 import logging
 import time
+import datetime
 from typing import Optional
-# --- 新增導入 ---
 from logging.handlers import TimedRotatingFileHandler
+
+_TZ_TAIPEI = datetime.timezone(datetime.timedelta(hours=8))
+
+
+class _TaipeiFormatter(logging.Formatter):
+    """Log formatter that displays timestamps in UTC+8."""
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.datetime.fromtimestamp(record.created, tz=_TZ_TAIPEI)
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.strftime('%Y-%m-%d %H:%M:%S') + ',%03d' % record.msecs
 
 # --- 新增：一個自定義過濾器，只允許包含特定關鍵字的日誌通過 ---
 class OpportunityFilter(logging.Filter):
@@ -17,56 +28,46 @@ class OpportunityFilter(logging.Filter):
     def filter(self, record):
         return '[OPPORTUNITY]' in record.getMessage()
 
-def setup_logging():
+def setup_logging(extra_handlers=None):
     """
-    設定全域的日誌格式與輸出。
+    設定全域的日誌格式與輸出（時間戳為 UTC+8）。
     - 主日誌 (arbitrage_bot.log): 每4小時輪替一次，記錄所有 INFO 等級以上的訊息。
     - 機會日誌 (opportunities.log): 每4小時輪替一次，僅記錄包含 '[OPPORTUNITY]' 的訊息。
     - 控制台輸出: 即時顯示所有 INFO 等級以上的訊息。
+    extra_handlers: 額外的 handler 列表，統一在此加入避免重複添加。
     """
-    # 獲取根日誌記錄器
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
 
-    # 如果已經有處理器，先清除，避免重複添加
-    if logger.hasHandlers():
-        logger.handlers.clear()
+    # 清除所有既有 handler，避免重複（含重啟時殘留的 handler）
+    logger.handlers.clear()
 
-    # --- 1. 設定主日誌檔案處理器 (每4小時輪替) ---
-    # atTime, when='H', interval=4, backupCount=42 (保留7天)
+    fmt = _TaipeiFormatter('%(asctime)s - %(levelname)s - %(message)s')
+
+    # --- 1. 主日誌（每4小時輪替）---
     main_handler = TimedRotatingFileHandler(
-        'arbitrage_bot.log',
-        when='H',
-        interval=4,
-        backupCount=42, # 4小時一次，一天6份，保留7天
-        encoding='utf-8'
+        'arbitrage_bot.log', when='H', interval=4, backupCount=42, encoding='utf-8'
     )
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    main_handler.setFormatter(formatter)
-    
-    # --- 2. 設定機會日誌檔案處理器 (專門記錄機會) ---
+    main_handler.setFormatter(fmt)
+
+    # --- 2. 機會日誌（只記錄 [OPPORTUNITY]）---
     opportunity_handler = TimedRotatingFileHandler(
-        'opportunities.log',
-        when='H',
-        interval=4,
-        backupCount=42,
-        encoding='utf-8'
+        'opportunities.log', when='H', interval=4, backupCount=42, encoding='utf-8'
     )
-    # 機會日誌可以使用更簡潔的格式
-    opportunity_formatter = logging.Formatter('%(asctime)s - %(message)s')
-    opportunity_handler.setFormatter(opportunity_formatter)
-    
-    # 關鍵：為這個處理器添加我們自訂的過濾器
+    opportunity_handler.setFormatter(_TaipeiFormatter('%(asctime)s - %(message)s'))
     opportunity_handler.addFilter(OpportunityFilter())
 
-    # --- 3. 設定控制台輸出處理器 ---
+    # --- 3. 控制台輸出 ---
     stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-    
-    # --- 4. 將所有處理器添加到根日誌記錄器 ---
+    stream_handler.setFormatter(fmt)
+
     logger.addHandler(main_handler)
     logger.addHandler(opportunity_handler)
     logger.addHandler(stream_handler)
+
+    # --- 4. 額外 handler（如 BotStateLogHandler）統一在此加入 ---
+    for h in (extra_handlers or []):
+        logger.addHandler(h)
 
 
 class CacheManager:

@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config import Config
 from deribit_ws_client import DeribitWebSocket
-from notifications import send_emergency_close_failed_notification
+from notifications import send_emergency_close_failed_notification, send_execution_failed_notification
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +45,11 @@ class DeribitTrader:
         perp_amount_usd = round(amount * strategy['perpOpenPrice'] / 10) * 10
         legs = [
             {'name': strategy['callInstrument'], 'direction': strategy['callDirection'],
-             'price': strategy['callPrice'],      'amount': amount},
+             'price': strategy['callPrice'],      'amount': amount,         'order_type': 'limit'},
             {'name': strategy['putInstrument'],  'direction': strategy['putDirection'],
-             'price': strategy['putPrice'],       'amount': amount},
+             'price': strategy['putPrice'],       'amount': amount,         'order_type': 'limit'},
             {'name': 'BTC-PERPETUAL',            'direction': perp_dir,
-             'price': strategy['perpOpenPrice'],  'amount': perp_amount_usd},
+             'price': 0,                          'amount': perp_amount_usd,'order_type': 'market'},
         ]
 
         # ── 步驟 1：三條腿併發下單 ────────────────────────────────────────────
@@ -62,6 +62,7 @@ class DeribitTrader:
                 instrument=leg['name'],
                 amount=leg['amount'],
                 price=leg['price'],
+                order_type=leg['order_type'],
             )
             return leg, result
 
@@ -93,6 +94,7 @@ class DeribitTrader:
             if actually_filled:
                 logger.warning(f"🚨 發現 {len(actually_filled)} 條腿已成交，緊急平倉...")
                 self._emergency_close_legs(actually_filled)
+            send_execution_failed_notification(strategy, 'api_rejected')
             return None
 
         # ── 步驟 2：等待三條腿全部成交 ────────────────────────────────────────
@@ -112,6 +114,7 @@ class DeribitTrader:
             if filled:
                 logger.warning(f"🚨 緊急平倉 {len(filled)} 條已成交腿，避免裸倉...")
                 self._emergency_close_legs(filled)
+            send_execution_failed_notification(strategy, 'timeout')
             return None
 
         logger.info("✅✅✅ 三條腿全部成交確認")
