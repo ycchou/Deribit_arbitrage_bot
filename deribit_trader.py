@@ -13,7 +13,6 @@
 """
 
 import logging
-import math
 import threading
 import time
 from typing import Dict, List, Optional
@@ -210,7 +209,8 @@ class DeribitTrader:
 
     def _emergency_close_legs(self, filled_legs: List[Dict]) -> None:
         """
-        以積極限價緊急平倉已成交的腿，避免裸倉。
+        以市價緊急平倉已成交的腿，避免裸倉。
+        使用 market order 確保立即成交，不受 tick size 限制。
         查詢實際倉位大小以正確處理部分成交的情況。
         """
         for leg in filled_legs:
@@ -224,26 +224,14 @@ class DeribitTrader:
                 continue
 
             reverse_dir = 'sell' if leg['direction'] == 'buy' else 'buy'
-            ticker      = self.ws.get_ticker(inst)
-            if not ticker:
-                logger.error(f"  🚨 無法取得 {inst} ticker，需立即手動平倉!")
-                continue
 
-            # 稍微穿越 spread 確保成交，並對齊 tick size
-            # BTC-PERPETUAL tick=$0.5，期權 tick=$0.0001
-            tick = 0.5 if inst == 'BTC-PERPETUAL' else 0.0001
-            if reverse_dir == 'buy':
-                raw = ticker['best_ask_price'] * 1.005
-                price = math.ceil(raw / tick) * tick
-            else:
-                raw = ticker['best_bid_price'] * 0.995
-                price = math.floor(raw / tick) * tick
-
+            # 使用 market order：緊急平倉優先確保成交，不計滑點
             result = self.ws.send_order(
                 direction=reverse_dir,
                 instrument=inst,
                 amount=actual_size,
-                price=price,
+                price=0,
+                order_type='market',
             )
             if result and 'order' in result:
                 logger.info(
