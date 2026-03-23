@@ -3,10 +3,11 @@
 """
 負責發送所有類型的通知，例如 Telegram。
 """
+import time
 import requests
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Dict
+from typing import Dict, List
 
 _TZ_TAIPEI = timezone(timedelta(hours=8))
 
@@ -192,4 +193,84 @@ _偵測時間: {timestamp}_
 """.strip()
 
     logger.info(f"發送流動性不足通知 (履約價 ${opportunity['strike']})")
-    return _send_message(message)   
+    return _send_message(message)
+
+
+# ── A1: 緊急平倉失敗 ─────────────────────────────────────────────────────────────
+
+def send_emergency_close_failed_notification(instrument: str, size: float, direction: str) -> bool:
+    """緊急平倉失敗時發送 Telegram 警報，需立即手動處理。"""
+    timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
+    message = f"""
+🚨 *緊急警報：平倉失敗，需立即手動處理！* 🚨
+
+機器人嘗試緊急平倉以下部位，但 *失敗*，現有裸倉風險！
+
+*未平倉詳情*:
+  • *合約*: `{instrument}`
+  • *倉位大小*: `{size}`
+  • *平倉方向*: `{direction}`
+
+⚠️ *請立即登入 Deribit 後台手動平倉！*
+
+_時間: {timestamp}_
+""".strip()
+    logger.error(f"🚨 緊急平倉失敗通知: {instrument}")
+    return _send_message(message)
+
+
+# ── A2: 倉位核對異常 ─────────────────────────────────────────────────────────────
+
+def send_position_mismatch_notification(expected: dict, actual: List[dict]) -> bool:
+    """bot 狀態與 Deribit 實際倉位不符時發送 Telegram 警報。"""
+    timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
+    actual_lines = '\n'.join(
+        f"  • `{p.get('instrument_name')}` size=`{p.get('size', 0)}`"
+        for p in actual if abs(p.get('size', 0)) > 0
+    ) or '  （無持倉）'
+    message = f"""
+⚠️ *倉位核對異常！* ⚠️
+
+機器人內部狀態與 Deribit 實際倉位不符，可能存在裸倉或缺漏倉位。
+
+*機器人預期持有*:
+  • Call: `{expected.get('call_instrument', 'N/A')}`
+  • Put: `{expected.get('put_instrument', 'N/A')}`
+  • Perp: `BTC-PERPETUAL`
+
+*Deribit 實際 BTC 持倉*:
+{actual_lines}
+
+⚠️ *請立即檢查 Deribit 帳戶！*
+
+_核對時間: {timestamp}_
+""".strip()
+    logger.warning("⚠️ 倉位核對異常通知已發送")
+    return _send_message(message)
+
+
+# ── A3: WebSocket 斷線（含 30 分鐘冷卻）────────────────────────────────────────
+
+_last_ws_disconnect_notify: float = 0.0
+_WS_DISCONNECT_COOLDOWN = 1800  # 30 分鐘
+
+
+def send_ws_disconnected_notification() -> bool:
+    """WebSocket 斷線時發送 Telegram 警報（30 分鐘內只發一次）。"""
+    global _last_ws_disconnect_notify
+    now = time.time()
+    if now - _last_ws_disconnect_notify < _WS_DISCONNECT_COOLDOWN:
+        logger.info("⏳ WS 斷線通知冷卻中，跳過發送")
+        return False
+    _last_ws_disconnect_notify = now
+
+    timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
+    message = f"""
+🔌 *WebSocket 斷線警報* 🔌
+
+機器人與 Deribit 的 WebSocket 連線已中斷，正在嘗試重新連接...
+
+_時間: {timestamp}_
+""".strip()
+    logger.warning("⚠️ WebSocket 斷線 Telegram 通知")
+    return _send_message(message)

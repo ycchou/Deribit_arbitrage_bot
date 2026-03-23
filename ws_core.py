@@ -23,6 +23,7 @@ from config import Config
 from ws_rpc             import WsRpcMixin
 from ws_subscription    import WsSubscriptionMixin
 from ws_message_handler import WsMessageHandlerMixin
+from notifications import send_ws_disconnected_notification
 
 logger = logging.getLogger(__name__)
 
@@ -152,11 +153,10 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
             self.is_connected = True
             logger.info('✅ WebSocket 已連接到 Deribit')
 
-            await self._authenticate()
-            await self._flush_pending_subscriptions()
-            self.connection_ready.set()
-
+            # Fix #auth: _receive_messages 必須與 _authenticate 並行執行，
+            # 否則 auth response 進入 buffer 時沒人讀，導致認證永遠超時。
             await asyncio.gather(
+                self._authenticate_then_subscribe(),
                 self._heartbeat(),
                 self._receive_messages(),
             )
@@ -167,8 +167,15 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
         self.connection_ready.clear()
         self._flush_pending_requests()   # Fix #4
         logger.warning('⚠️ WebSocket 連線已關閉')
+        send_ws_disconnected_notification()  # A3
 
     # ── 認證 ────────────────────────────────────────────────────────────────────
+
+    async def _authenticate_then_subscribe(self) -> None:
+        """認證完成後再訂閱，並設定 connection_ready。"""
+        await self._authenticate()
+        await self._flush_pending_subscriptions()
+        self.connection_ready.set()
 
     async def _authenticate(self) -> None:
         payload = {

@@ -13,6 +13,7 @@
 """
 
 import logging
+import math
 import threading
 import time
 from typing import Dict, List, Optional
@@ -20,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config import Config
 from deribit_ws_client import DeribitWebSocket
+from notifications import send_emergency_close_failed_notification
 
 logger = logging.getLogger(__name__)
 
@@ -40,13 +42,15 @@ class DeribitTrader:
         )
 
         perp_dir = 'buy' if strategy['perpDirection'] == 'long' else 'sell'
+        # BTC-PERPETUAL 的 amount 單位是 USD（最小 10 USD，須為 10 的倍數）
+        perp_amount_usd = round(amount * strategy['perpOpenPrice'] / 10) * 10
         legs = [
             {'name': strategy['callInstrument'], 'direction': strategy['callDirection'],
-             'price': strategy['callPrice']},
+             'price': strategy['callPrice'],      'amount': amount},
             {'name': strategy['putInstrument'],  'direction': strategy['putDirection'],
-             'price': strategy['putPrice']},
+             'price': strategy['putPrice'],       'amount': amount},
             {'name': 'BTC-PERPETUAL',            'direction': perp_dir,
-             'price': strategy['perpOpenPrice']},
+             'price': strategy['perpOpenPrice'],  'amount': perp_amount_usd},
         ]
 
         # ── 步驟 1：三條腿併發下單 ────────────────────────────────────────────
@@ -57,7 +61,7 @@ class DeribitTrader:
             result = self.ws.send_order(
                 direction=leg['direction'],
                 instrument=leg['name'],
-                amount=amount,
+                amount=leg['amount'],
                 price=leg['price'],
             )
             return leg, result
@@ -82,6 +86,14 @@ class DeribitTrader:
         if api_failed:
             logger.error("❌ 部分條腿被 API 拒絕，撤銷已掛單...")
             self._cancel_orders(placed)
+            # 撤單後確認實際持倉，已成交的腿需緊急平倉（避免裸倉）
+            actually_filled = [
+                o for o in placed
+                if abs((self.get_position(o['instrument']) or {}).get('size', 0)) > 0
+            ]
+            if actually_filled:
+                logger.warning(f"🚨 發現 {len(actually_filled)} 條腿已成交，緊急平倉...")
+                self._emergency_close_legs(actually_filled)
             return None
 
         # ── 步驟 2：等待三條腿全部成交 ────────────────────────────────────────
@@ -217,11 +229,15 @@ class DeribitTrader:
                 logger.error(f"  🚨 無法取得 {inst} ticker，需立即手動平倉!")
                 continue
 
-            # 稍微穿越 spread 確保成交
+            # 稍微穿越 spread 確保成交，並對齊 tick size
+            # BTC-PERPETUAL tick=$0.5，期權 tick=$0.0001
+            tick = 0.5 if inst == 'BTC-PERPETUAL' else 0.0001
             if reverse_dir == 'buy':
-                price = ticker['best_ask_price'] * 1.005
+                raw = ticker['best_ask_price'] * 1.005
+                price = math.ceil(raw / tick) * tick
             else:
-                price = ticker['best_bid_price'] * 0.995
+                raw = ticker['best_bid_price'] * 0.995
+                price = math.floor(raw / tick) * tick
 
             result = self.ws.send_order(
                 direction=reverse_dir,
@@ -235,3 +251,4 @@ class DeribitTrader:
                 )
             else:
                 logger.error(f"  ❌❌ 緊急平倉失敗: {inst} — 需立即手動處理!")
+                send_emergency_close_failed_notification(inst, actual_size, reverse_dir)

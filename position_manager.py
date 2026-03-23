@@ -19,6 +19,7 @@ from deribit_ws_client import DeribitWebSocket
 from bot_state import bot_state
 from state_store import load as load_state, save as save_state
 from closure_strategies import manage_closure
+from notifications import send_position_mismatch_notification
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,9 @@ class PositionManager:
 
         # Maker 平倉單成交事件（由 WebSocket callback 觸發）
         self._maker_order_filled = threading.Event()
+
+        # A2: 倉位核對計時器
+        self._last_reconcile_time: float = 0.0
 
     # ── 生命週期 ────────────────────────────────────────────────────────────────
 
@@ -67,7 +71,9 @@ class PositionManager:
     # ── 新增部位 ────────────────────────────────────────────────────────────────
 
     def add_position(self, expiry_timestamp: int, amount: float,
-                     net_profit: float = 0.0, margin: float = 0.0) -> None:
+                     net_profit: float = 0.0, margin: float = 0.0,
+                     strategy_name: str = '', strike: float = 0,
+                     call_instrument: str = '', put_instrument: str = '') -> None:
         pos = {
             'instrument':        'BTC-PERPETUAL',
             'amount':            amount,
@@ -77,6 +83,10 @@ class PositionManager:
             'entry_time':        time.time(),
             'net_profit_est':    net_profit,
             'margin_est':        margin,
+            'strategy_name':     strategy_name,
+            'strike':            strike,
+            'call_instrument':   call_instrument,
+            'put_instrument':    put_instrument,
         }
         with self.lock:
             self.active_position = pos.copy()
@@ -116,4 +126,43 @@ class PositionManager:
             except Exception as e:
                 logger.error(f"❌ 管理部位時發生錯誤: {e}", exc_info=True)
 
+            # A2: 每 60 秒核對一次實際倉位
+            now = time.time()
+            if now - self._last_reconcile_time >= 60:
+                self._last_reconcile_time = now
+                try:
+                    self._reconcile_positions()
+                except Exception as e:
+                    logger.error(f"❌ 倉位核對失敗: {e}", exc_info=True)
+
             time.sleep(1)
+
+    # ── A2: 倉位核對 ─────────────────────────────────────────────────────────────
+
+    def _reconcile_positions(self) -> None:
+        """比對 bot 預期倉位與 Deribit 實際倉位，不符時發送警報。"""
+        with self.lock:
+            pos = self.active_position
+        if not pos:
+            return
+
+        actual = self.ws.get_all_positions_ws()
+        if actual is None:
+            logger.warning("⚠️ 無法取得 Deribit 實際倉位（可能 WS 未認證）")
+            return
+
+        actual_map = {p['instrument_name']: abs(p.get('size', 0)) for p in actual}
+        expected = [
+            inst for inst in [
+                pos.get('call_instrument', ''),
+                pos.get('put_instrument', ''),
+                'BTC-PERPETUAL',
+            ] if inst
+        ]
+
+        missing = [inst for inst in expected if actual_map.get(inst, 0) == 0]
+        if missing:
+            logger.warning(f"⚠️ 倉位核對異常，以下合約實際倉位為零: {missing}")
+            send_position_mismatch_notification(pos, actual)
+        else:
+            logger.debug("✅ 倉位核對正常")

@@ -71,6 +71,14 @@ class WsRpcMixin:
             return None
         return self._rpc_call('private/get_order_state', {'order_id': order_id}, timeout=3)
 
+    def get_all_positions_ws(self) -> Optional[list]:
+        """透過 WebSocket 查詢所有 BTC 持倉。"""
+        if not self.is_authenticated:
+            return None
+        result = self._rpc_call('private/get_positions',
+                                 {'currency': 'BTC', 'kind': 'any'}, timeout=8)
+        return result if isinstance(result, list) else None
+
     def get_open_orders_ws(self, instrument: str) -> Optional[list]:
         """透過 WebSocket 查詢掛單。"""
         if not self.is_authenticated:
