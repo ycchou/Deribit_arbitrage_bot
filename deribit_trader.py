@@ -40,6 +40,13 @@ class DeribitTrader:
             f"🚀 執行策略: {strategy['strategyName']} @ ${strategy['strike']} ({amount} BTC)"
         )
 
+        # ── 進場前查 Deribit 實際倉位，防止 bot 未記錄的重複開倉 ──────────────
+        for inst in [strategy['callInstrument'], strategy['putInstrument']]:
+            existing = self.get_position(inst)
+            if existing and abs(existing.get('size', 0)) > 0:
+                logger.warning(f"⚠️ 進場前發現 {inst} 已有 Deribit 倉位，取消執行（防重複）")
+                return None
+
         perp_dir = 'buy' if strategy['perpDirection'] == 'long' else 'sell'
         # BTC-PERPETUAL 的 amount 單位是 USD（最小 10 USD，須為 10 的倍數）
         perp_amount_usd = round(amount * strategy['perpOpenPrice'] / 10) * 10
@@ -54,6 +61,7 @@ class DeribitTrader:
 
         # ── 步驟 1：三條腿併發下單 ────────────────────────────────────────────
         placed: List[Dict] = []
+        no_response_legs: List[Dict] = []   # 無回應腿（order_id 為 None）
         api_failed = False
 
         def place_leg(leg: dict):
@@ -82,17 +90,25 @@ class DeribitTrader:
                     err = result.get('message') if result else '無回應'
                     logger.error(f"  ❌ 下單被 API 拒絕: {leg['name']} → {err}")
                     api_failed = True
+                    # 無回應不代表未成交，記錄下來稍後驗證實際倉位
+                    no_response_legs.append({
+                        'instrument': leg['name'],
+                        'direction':  leg['direction'],
+                    })
 
         if api_failed:
-            logger.error("❌ 部分條腿被 API 拒絕，撤銷已掛單...")
+            logger.error("❌ 部分條腿被 API 拒絕，撤銷已掛單並驗證實際倉位...")
             self._cancel_orders(placed)
-            # 撤單後確認實際持倉，已成交的腿需緊急平倉（避免裸倉）
+            # 查所有腿（含無回應腿）的實際倉位，避免遺漏已成交的 ghost order
+            all_to_verify = placed + no_response_legs
             actually_filled = [
-                o for o in placed
+                o for o in all_to_verify
                 if abs((self.get_position(o['instrument']) or {}).get('size', 0)) > 0
             ]
             if actually_filled:
-                logger.warning(f"🚨 發現 {len(actually_filled)} 條腿已成交，緊急平倉...")
+                logger.warning(
+                    f"🚨 發現 {len(actually_filled)} 條腿已成交（含無回應腿），緊急平倉..."
+                )
                 self._emergency_close_legs(actually_filled)
             send_execution_failed_notification(strategy, 'api_rejected')
             return None

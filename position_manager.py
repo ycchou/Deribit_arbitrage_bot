@@ -186,18 +186,21 @@ class PositionManager:
         for pos in positions:
             call_inst = pos.get('call_instrument', '')
             put_inst  = pos.get('put_instrument', '')
-            legs = [inst for inst in [call_inst, put_inst, 'BTC-PERPETUAL'] if inst]
-            missing = [inst for inst in legs if actual_map.get(inst, 0) == 0]
 
-            if not missing:
+            # 只用選擇權兩腿判斷「全部關閉」。
+            # Perp 由多組倉位共用，無法用 perp=0 判斷單一組是否關閉。
+            option_legs   = [inst for inst in [call_inst, put_inst] if inst]
+            missing_opts  = [inst for inst in option_legs if actual_map.get(inst, 0) == 0]
+
+            if not missing_opts:
                 logger.debug(f"✅ 倉位核對正常 [{call_inst}]")
                 continue
 
-            if len(missing) == len(legs):
-                # 所有腿都已消失 → 手動平倉，自動清除
+            if len(missing_opts) == len(option_legs):
+                # 兩腿選擇權都消失 → 視為手動平倉，自動移除
                 logger.info(f"🧹 偵測到手動平倉 [{call_inst}]，自動移除 bot 部位")
                 self.remove_position(call_inst)
             else:
-                # 部分腿消失 → 裸倉警報
-                logger.warning(f"⚠️ 倉位核對異常 [{call_inst}]，以下合約實際倉位為零: {missing}")
+                # 只有一腿消失 → 裸倉警報
+                logger.warning(f"⚠️ 倉位核對異常 [{call_inst}]，以下合約實際倉位為零: {missing_opts}")
                 send_position_mismatch_notification(pos, actual)
