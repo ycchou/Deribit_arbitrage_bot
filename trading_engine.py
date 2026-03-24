@@ -123,13 +123,25 @@ def perform_final_check_and_execute(
     # ── 執行交易 ──────────────────────────────────────────────────────────────
     result = trader.execute_arbitrage_strategy(final, required_amount)
     if result and result.get('success'):
+        fill_map = {o['instrument']: o.get('avg_price', 0.0) for o in result['orders']}
+        final['fill_call_price'] = fill_map.get(final['callInstrument'], 0.0)
+        final['fill_put_price']  = fill_map.get(final['putInstrument'],  0.0)
+        final['fill_perp_price'] = fill_map.get('BTC-PERPETUAL',         0.0)
         send_trade_execution_notification(final)
+        perp_amount_usd = round(required_amount * final['perpOpenPrice'] / 10) * 10
         pos_manager.add_position(
             expiry_timestamp=final['expiryTimestamp'],
             amount=required_amount,
             net_profit=final['netProfit'],
             margin=final['margin'],
+            strategy_name=final.get('strategyName', ''),
+            strike=final.get('strike', 0),
+            call_instrument=final.get('callInstrument', ''),
+            put_instrument=final.get('putInstrument', ''),
+            perp_amount_usd=perp_amount_usd,
         )
+        global_state.daily_trade_count += 1
+        global_state.last_trade_time = time.time()
         bot_state.add_trade(final)
         return True
 

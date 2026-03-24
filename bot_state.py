@@ -60,6 +60,7 @@ class BotState:
 
         # ── Position ─────────────────────────────────────────────────────────
         self.active_position: Optional[Dict] = None
+        self._active_positions_list: List[Dict] = []
 
         # ── History ──────────────────────────────────────────────────────────
         self.trade_history: deque = deque(maxlen=50)
@@ -119,6 +120,13 @@ class BotState:
             self.active_position = position
         self._push({'type': 'active_position', 'position': position})
 
+    def update_active_positions(self, positions: List[Dict]) -> None:
+        """接受部位列表；同時維護 active_position 供 dashboard 向後相容。"""
+        with self._lock:
+            self.active_position = positions[0] if positions else None
+            self._active_positions_list = list(positions)
+        self._push({'type': 'active_positions', 'positions': positions})
+
     def add_trade(self, trade: Dict) -> None:
         now = time.time()
         entry = {**trade, 'time': _tw_time(), 'timestamp': now}
@@ -162,6 +170,7 @@ class BotState:
                 'ws_authenticated': self.ws_authenticated,
                 'scan_info': self.scan_info,
                 'active_position': self.active_position,
+                'active_positions': self._active_positions_list,
                 'trade_history': list(self.trade_history),
                 'log_buffer': list(self.log_buffer),
                 'last_trade_time': self.last_trade_time,

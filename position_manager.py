@@ -1,18 +1,16 @@
 # arbitrage_bot/position_manager.py
 
 """
-管理活躍的交易部位，自動平倉。
+管理活躍的交易部位（多組並行），自動平倉。
 三階段平倉邏輯已移至 closure_strategies.py。
 
-Fix #3  Taker 平倉前確認 Maker 單已取消，避免建立雙倉
-Fix #5  所有部位狀態變化均同步更新 bot_state
-Fix #10 部位狀態持久化至 state.json，重啟後自動恢復
+支援每日最多 8 組並行部位，各自獨立追蹤與平倉。
 """
 
 import time
 import logging
 import threading
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from deribit_trader import DeribitTrader
 from deribit_ws_client import DeribitWebSocket
@@ -28,13 +26,13 @@ class PositionManager:
     def __init__(self, trader: DeribitTrader, ws_client: DeribitWebSocket):
         self.trader = trader
         self.ws     = ws_client
-        self.active_position: Optional[Dict] = None
+        self.active_positions: List[Dict] = []
         self.lock        = threading.Lock()
         self.is_running  = False
         self._thread     = threading.Thread(target=self._run, daemon=True)
 
-        # Maker 平倉單成交事件（由 WebSocket callback 觸發）
-        self._maker_order_filled = threading.Event()
+        # 已成交的 Maker 平倉單 order_id 集合（由 WebSocket callback 更新）
+        self._filled_maker_orders: set = set()
 
         # A2: 倉位核對計時器
         self._last_reconcile_time: float = 0.0
@@ -47,17 +45,18 @@ class PositionManager:
         self.is_running = True
         self.ws.subscribe_user_orders('BTC-PERPETUAL', self._on_order_update)
 
-        # Fix #10: 讀取持久化部位
+        # 讀取持久化部位（向後相容：若存的是單個 dict，包成 list）
         saved     = load_state()
-        saved_pos = saved.get('active_position')
+        saved_pos = saved.get('active_positions') or saved.get('active_position')
         if saved_pos:
+            if isinstance(saved_pos, dict):
+                saved_pos = [saved_pos]
             logger.warning(
-                f"📁 發現持久化部位，載入監控: {saved_pos.get('status')} "
-                f"到期={time.ctime(saved_pos['expiry_timestamp'] / 1000)}"
+                f"📁 發現持久化部位，載入監控: {len(saved_pos)} 個"
             )
             with self.lock:
-                self.active_position = saved_pos
-            bot_state.update_active_position(saved_pos)
+                self.active_positions = saved_pos
+            bot_state.update_active_positions(saved_pos)
 
         self._thread.start()
         logger.info('✅ 部位管理器已啟動')
@@ -73,7 +72,8 @@ class PositionManager:
     def add_position(self, expiry_timestamp: int, amount: float,
                      net_profit: float = 0.0, margin: float = 0.0,
                      strategy_name: str = '', strike: float = 0,
-                     call_instrument: str = '', put_instrument: str = '') -> None:
+                     call_instrument: str = '', put_instrument: str = '',
+                     perp_amount_usd: float = 0.0) -> None:
         pos = {
             'instrument':        'BTC-PERPETUAL',
             'amount':            amount,
@@ -87,13 +87,38 @@ class PositionManager:
             'strike':            strike,
             'call_instrument':   call_instrument,
             'put_instrument':    put_instrument,
+            'perp_amount_usd':   perp_amount_usd,
         }
         with self.lock:
-            self.active_position = pos.copy()
-        self._maker_order_filled.clear()
-        bot_state.update_active_position(pos)
-        save_state('active_position', pos)
-        logger.info(f"📈 新部位加入管理，到期: {time.ctime(expiry_timestamp / 1000)}")
+            self.active_positions.append(pos.copy())
+            positions_copy = list(self.active_positions)
+        bot_state.update_active_positions(positions_copy)
+        save_state('active_positions', positions_copy)
+        logger.info(
+            f"📈 新部位加入管理 [{call_instrument}]，"
+            f"到期: {time.ctime(expiry_timestamp / 1000)}，"
+            f"總計 {len(positions_copy)} 個"
+        )
+
+    def remove_position(self, call_instrument: str) -> None:
+        """平倉完成後從列表移除，並同步持久化與 dashboard。"""
+        with self.lock:
+            self.active_positions = [
+                p for p in self.active_positions
+                if p.get('call_instrument') != call_instrument
+            ]
+            remaining = list(self.active_positions)
+        bot_state.update_active_positions(remaining)
+        save_state('active_positions', remaining)
+        logger.info(f"📉 部位已移除: {call_instrument}，剩餘 {len(remaining)} 個")
+
+    def update_position_fields(self, call_instrument: str, **updates) -> None:
+        """更新指定部位的欄位（如 status、maker_order_id）。"""
+        with self.lock:
+            for p in self.active_positions:
+                if p.get('call_instrument') == call_instrument:
+                    p.update(updates)
+                    break
 
     # ── WebSocket 訂單更新 callback ─────────────────────────────────────────────
 
@@ -101,30 +126,32 @@ class PositionManager:
         order_id    = order.get('order_id')
         order_state = order.get('order_state')
 
+        if order_state not in ('filled', 'cancelled'):
+            return
+
         with self.lock:
-            pos = self.active_position
-            if not pos:
-                return
-            if pos.get('maker_order_id') == order_id:
-                if order_state in ('filled', 'cancelled'):
+            for pos in self.active_positions:
+                if pos.get('maker_order_id') == order_id:
                     logger.info(f"✅ Maker 平倉單 {order_id} 狀態: {order_state}")
-                    self._maker_order_filled.set()
+                    self._filled_maker_orders.add(order_id)
+                    break
 
     # ── 主循環 ──────────────────────────────────────────────────────────────────
 
     def _run(self) -> None:
         while self.is_running:
             with self.lock:
-                pos = self.active_position.copy() if self.active_position else None
+                positions = list(self.active_positions)
 
-            if not pos:
+            if not positions:
                 time.sleep(1)
                 continue
 
-            try:
-                manage_closure(self, pos)
-            except Exception as e:
-                logger.error(f"❌ 管理部位時發生錯誤: {e}", exc_info=True)
+            for pos in positions:
+                try:
+                    manage_closure(self, pos)
+                except Exception as e:
+                    logger.error(f"❌ 管理部位時發生錯誤 [{pos.get('call_instrument')}]: {e}", exc_info=True)
 
             # A2: 每 60 秒核對一次實際倉位
             now = time.time()
@@ -142,8 +169,8 @@ class PositionManager:
     def _reconcile_positions(self) -> None:
         """比對 bot 預期倉位與 Deribit 實際倉位，不符時發送警報。"""
         with self.lock:
-            pos = self.active_position
-        if not pos:
+            positions = list(self.active_positions)
+        if not positions:
             return
 
         actual = self.ws.get_all_positions_ws()
@@ -152,17 +179,18 @@ class PositionManager:
             return
 
         actual_map = {p['instrument_name']: abs(p.get('size', 0)) for p in actual}
-        expected = [
-            inst for inst in [
-                pos.get('call_instrument', ''),
-                pos.get('put_instrument', ''),
-                'BTC-PERPETUAL',
-            ] if inst
-        ]
 
-        missing = [inst for inst in expected if actual_map.get(inst, 0) == 0]
-        if missing:
-            logger.warning(f"⚠️ 倉位核對異常，以下合約實際倉位為零: {missing}")
-            send_position_mismatch_notification(pos, actual)
-        else:
-            logger.debug("✅ 倉位核對正常")
+        for pos in positions:
+            expected = [
+                inst for inst in [
+                    pos.get('call_instrument', ''),
+                    pos.get('put_instrument', ''),
+                    'BTC-PERPETUAL',
+                ] if inst
+            ]
+            missing = [inst for inst in expected if actual_map.get(inst, 0) == 0]
+            if missing:
+                logger.warning(f"⚠️ 倉位核對異常 [{pos.get('call_instrument')}]，以下合約實際倉位為零: {missing}")
+                send_position_mismatch_notification(pos, actual)
+            else:
+                logger.debug(f"✅ 倉位核對正常 [{pos.get('call_instrument')}]")

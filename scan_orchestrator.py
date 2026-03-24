@@ -4,15 +4,13 @@
 掃描協調器：每次 BTC-PERPETUAL ticker 更新時觸發，
 協調冷卻期檢查、行使價訂閱、機會掃描、交易鎖、最終執行。
 
-冷卻邏輯：持有倉位期間不掃描，倉位到期平倉後立即恢復。
-Fix #1  _trade_lock non-blocking acquire，避免重複執行
-Fix #8  下單失敗後 5 分鐘短暫冷卻
-Fix #9  鎖內雙重確認無活躍部位（硬性上限 = 1）
+每日最多 8 組，組間冷卻 5 分鐘。持有部位期間繼續掃描，
+但達到上限或冷卻中時僅發通知不下單。
 """
 
 import logging
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from config import Config
 from deribit_api import get_tomorrow_expiry, get_target_strikes, get_funding_rate
@@ -29,6 +27,67 @@ _last_opportunity_notify_time: float = 0.0
 logger = logging.getLogger(__name__)
 
 
+def _notify_opportunity(best: Dict, block_reason: Optional[str]) -> None:
+    """
+    發現利潤機會時發送 Telegram 通知（10 分鐘冷卻）。
+    若無法進場，在訊息末尾附上原因。
+    """
+    global _last_opportunity_notify_time
+    now = time.time()
+    if now - _last_opportunity_notify_time < _OPPORTUNITY_NOTIFY_COOLDOWN:
+        return
+    _last_opportunity_notify_time = now
+
+    if block_reason is None:
+        send_telegram_notification(best)
+        return
+
+    reason_label = {
+        'daily_limit': f'⛔ 今日已達 {Config.MAX_DAILY_TRADES} 組上限，僅供參考',
+        'cooldown':    f'⏳ 冷卻中（剩餘 {max(0, Config.TRADE_COOLDOWN_SECONDS - (now - global_state.last_trade_time)):.0f}s），僅供參考',
+        'duplicate':   '⚠️ 同合約已在持倉中，僅供參考',
+    }.get(block_reason, f'⚠️ {block_reason}，僅供參考')
+
+    send_telegram_notification_with_reason(best, reason_label)
+
+
+def send_telegram_notification_with_reason(opportunity: Dict, block_reason_label: str) -> bool:
+    """發送套利機會通知，附上無法進場原因。"""
+    from notifications import _send_message, _now_tw
+    timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
+
+    call_action = '賣出' if opportunity['callDirection'] == 'sell' else '買入'
+    put_action  = '賣出' if opportunity['putDirection']  == 'sell' else '買入'
+    perp_action = '買入' if opportunity['perpDirection'] == 'long' else '賣出'
+    funding_text = f"{opportunity['fundingDirection']} ${opportunity['fundingCost']:.2f}"
+
+    message = f"""
+📈 *Deribit 套利機會發現!* 📈
+
+*策略類型*: {opportunity['strategyName']}
+*到期日*: {opportunity['expiryDate']}
+*履約價*: ${opportunity['strike']}
+
+--- *下單參數* ---
+• *{call_action} Call*: `{opportunity['callInstrument']}` @ `{opportunity['callPrice']:.4f} BTC`
+• *{put_action} Put*: `{opportunity['putInstrument']}` @ `{opportunity['putPrice']:.4f} BTC`
+• *{perp_action} Perpetual*: `BTC-PERPETUAL` @ `${opportunity['perpOpenPrice']:.2f}`
+
+--- *財務分析* ---
+• *預估淨利潤*: `${opportunity['netProfit']:.2f}`
+• *理論利潤*: `${opportunity['grossProfit']:.2f}`
+• *估計總手續費*: `${opportunity['totalFees']:.2f}`
+• *預估資金費率*: `{funding_text}`
+• *所需保證金 (估算)*: `${opportunity['margin']:.0f}`
+
+{block_reason_label}
+
+_資料時間: {timestamp}_
+""".strip()
+
+    return _send_message(message)
+
+
 def run_scan(ws_client, trader, pos_manager) -> None:
     """
     單次掃描邏輯。
@@ -37,20 +96,6 @@ def run_scan(ws_client, trader, pos_manager) -> None:
     try:
         # ── 節流 ──────────────────────────────────────────────────────────────
         if not global_state.should_scan():
-            return
-
-        # ── 持倉中：等待倉位到期平倉後才恢復掃描 ─────────────────────────────
-        with pos_manager.lock:
-            has_position = pos_manager.active_position is not None
-            pos_expiry   = (pos_manager.active_position or {}).get('expiry_timestamp')
-
-        if has_position:
-            remaining_sec = max(0, (pos_expiry / 1000) - time.time()) if pos_expiry else 0
-            logger.debug(f"📦 持倉中，等待到期（剩餘 {remaining_sec:.0f}s）")
-            bot_state.update_scan_info({
-                'status':         'position_open',
-                'last_scan_time': time.time(),
-            })
             return
 
         # ── Fix #8: 下單失敗短暫冷卻 ──────────────────────────────────────────
@@ -73,7 +118,7 @@ def run_scan(ws_client, trader, pos_manager) -> None:
         # 從已取得的 perp_ticker 直接讀取 funding rate，避免重複加鎖
         funding_rate_8h = perp_ticker.get('funding_8h')
         if funding_rate_8h is not None:
-            bot_state.update_funding_rate(funding_rate_8h)   # Fix #6
+            bot_state.update_funding_rate(funding_rate_8h)
         else:
             funding_rate_8h = get_funding_rate(ws_client)    # fallback
 
@@ -102,7 +147,7 @@ def run_scan(ws_client, trader, pos_manager) -> None:
             if not ws_client.wait_for_data(instruments_needed, timeout=10):
                 logger.warning('⚠️ 部分數據未就緒，繼續執行')
 
-        # ── 掃描套利機會（傳入預取資料，避免每個 strike 重複加鎖）──────────
+        # ── 掃描套利機會 ────────────────────────────────────────────────────
         all_opportunities: List[Dict] = []
         for strike in strikes:
             result = check_arbitrage_opportunity(
@@ -114,50 +159,86 @@ def run_scan(ws_client, trader, pos_manager) -> None:
                 if result['strategyB'] and result['strategyB']['netProfit'] > Config.MIN_NET_PROFIT_OPPORTUNITY:
                     all_opportunities.append(result['strategyB'])
 
+        # ── 更新持倉狀態顯示 ──────────────────────────────────────────────────
+        with pos_manager.lock:
+            n_positions = len(pos_manager.active_positions)
+
+        global_state.check_and_reset_daily()
+        _now = time.time()
+        _cooldown_remaining = max(0, Config.TRADE_COOLDOWN_SECONDS - (_now - global_state.last_trade_time)) \
+            if global_state.last_trade_time > 0 else 0
+
+        _common_scan_info = {
+            'last_scan_time':             _now,
+            'expiry_date':                expiry_info['dateStr'],
+            'positions_held':             n_positions,
+            'daily_count':                global_state.daily_trade_count,
+            'trade_cooldown_remaining_sec': round(_cooldown_remaining),
+        }
+
         if not all_opportunities:
             logger.debug(f'📊 未發現高利潤機會 (> ${Config.MIN_NET_PROFIT_OPPORTUNITY})')
-            bot_state.update_scan_info({
-                'status':         'no_opportunity',
-                'last_scan_time': time.time(),
-                'expiry_date':    expiry_info['dateStr'],
-            })
+            bot_state.update_scan_info({'status': 'no_opportunity', **_common_scan_info})
             return
 
         # ── 選出最佳機會 ───────────────────────────────────────────────────────
-        global _last_opportunity_notify_time
         best = max(all_opportunities, key=lambda x: x['netProfit'])
         logger.info(
             f"🏆 最佳機會: {best['strategyName']} @ ${best['strike']} "
             f"淨利=${best['netProfit']:.2f}"
         )
         bot_state.update_scan_info({
-            'status':         'opportunity_found',
+            'status':        'opportunity_found',
             'strike':         best['strike'],
             'best_profit':    best['netProfit'],
             'strategy_name':  best['strategyName'],
-            'last_scan_time': time.time(),
-            'expiry_date':    expiry_info['dateStr'],
+            **_common_scan_info,
         })
 
-        # ── 發現機會通知（10 分鐘冷卻，避免同一機會重複推送）──────────────
-        now = time.time()
-        if now - _last_opportunity_notify_time >= _OPPORTUNITY_NOTIFY_COOLDOWN:
-            _last_opportunity_notify_time = now
-            send_telegram_notification(best)
+        # ── 計算是否可以進場 ──────────────────────────────────────────────────
+        can_trade   = True
+        block_reason = None
+
+        if global_state.daily_trade_count >= Config.MAX_DAILY_TRADES:
+            can_trade    = False
+            block_reason = 'daily_limit'
+            logger.debug(f"📊 已達每日 {Config.MAX_DAILY_TRADES} 組上限，暫停進場")
+
+        if can_trade:
+            cooldown_elapsed = time.time() - global_state.last_trade_time
+            if global_state.last_trade_time > 0 and cooldown_elapsed < Config.TRADE_COOLDOWN_SECONDS:
+                remaining = Config.TRADE_COOLDOWN_SECONDS - cooldown_elapsed
+                can_trade    = False
+                block_reason = 'cooldown'
+                logger.debug(f"⏳ 組間冷卻中，剩餘 {remaining:.0f}s")
+
+        if can_trade:
+            with pos_manager.lock:
+                open_calls = {p['call_instrument'] for p in pos_manager.active_positions}
+                open_puts  = {p['put_instrument']  for p in pos_manager.active_positions}
+            if best['callInstrument'] in open_calls or best['putInstrument'] in open_puts:
+                can_trade    = False
+                block_reason = 'duplicate'
+                logger.debug(f"⚠️ {best['callInstrument']} 已在持倉中，跳過")
+
+        # ── 有機會就通知（不論能否進場）──────────────────────────────────────
+        _notify_opportunity(best, block_reason if not can_trade else None)
+
+        if not can_trade:
+            return
 
         # ── Fix #1: non-blocking 取得交易鎖 ───────────────────────────────────
         if not global_state._trade_lock.acquire(blocking=False):
             logger.info("⚡️ 其他執行緒正在交易中，跳過本次機會")
             return
         try:
-            # Fix #9: 鎖內雙重確認無活躍部位
+            # 鎖內雙重確認（防重複開倉同一合約）
             with pos_manager.lock:
-                if pos_manager.active_position:
-                    logger.info(
-                        f"⚠️ 已有活躍部位（{pos_manager.active_position.get('status')}），"
-                        "跳過執行"
-                    )
-                    return
+                open_calls = {p['call_instrument'] for p in pos_manager.active_positions}
+                open_puts  = {p['put_instrument']  for p in pos_manager.active_positions}
+            if best['callInstrument'] in open_calls or best['putInstrument'] in open_puts:
+                logger.info("⚠️ 鎖內確認：同合約已在持倉中，跳過執行")
+                return
             perform_final_check_and_execute(best, ws_client, trader, pos_manager)
         finally:
             global_state._trade_lock.release()

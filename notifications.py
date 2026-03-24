@@ -86,29 +86,59 @@ _數據來源: WebSocket 實時訂閱_
     return success
 
 def send_trade_execution_notification(opportunity: Dict) -> bool:
-    """發送成功執行交易的通知"""
+    """發送成功執行交易的通知，含各腿實際成交價、手續費、期權到期時間。"""
     timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
+
+    # ── 實際成交價（market order 後由 average_price 填入）──────────────────
+    perp_fill  = opportunity.get('fill_perp_price') or opportunity.get('perpOpenPrice', 0.0)
+    call_fill  = opportunity.get('fill_call_price') or opportunity.get('callPrice', 0.0)
+    put_fill   = opportunity.get('fill_put_price')  or opportunity.get('putPrice',  0.0)
+    amount     = Config.TRADE_AMOUNT_BTC
+
+    # ── 手續費估算（Deribit taker，市價單）────────────────────────────────
+    # 選擇權：0.03% of underlying per leg
+    # 永續：  0.05% of notional
+    opt_fee  = perp_fill * 0.0003 * amount   # per option leg (USD)
+    perp_fee = perp_fill * 0.0005 * amount   # perp leg (USD)
+    entry_fees_total = opt_fee * 2 + perp_fee
+
+    # ── 成交價 USD 換算（選擇權報 BTC，乘以 perp 成交價）─────────────────
+    call_usd = call_fill * perp_fill
+    put_usd  = put_fill  * perp_fill
+
+    # ── 期權到期時間（UTC+8）──────────────────────────────────────────────
+    expiry_ts = opportunity.get('expiryTimestamp', 0)
+    if expiry_ts:
+        expiry_dt  = datetime.fromtimestamp(expiry_ts, tz=_TZ_TAIPEI)
+        expiry_str = expiry_dt.strftime('%Y-%m-%d %H:%M') + ' UTC+8'
+    else:
+        expiry_str = opportunity.get('expiryDate', 'N/A')
+
+    call_action = '買入' if opportunity['callDirection'] == 'buy' else '賣出'
+    put_action  = '買入' if opportunity['putDirection']  == 'buy' else '賣出'
+    perp_action = '賣出' if opportunity['perpDirection'] == 'short' else '買入'
 
     message = f"""
 🚀 *套利交易已成功執行* 🚀
 
-*策略詳情*:
-  • *類型*: {opportunity['strategyName']}
-  • *履約價*: `${opportunity['strike']}`
-  • *到期日*: {opportunity['expiryDate']}
-  • *交易單位*: `{Config.TRADE_AMOUNT_BTC} BTC`
+*{opportunity['strategyName']}*  履約價 `${opportunity['strike']}`  數量 `{amount} BTC`
 
-*財務預估*:
-  • *預估淨利潤*: `${opportunity['netProfit']:.2f}`
-  • *理論毛利*: `${opportunity['grossProfit']:.2f}`
+--- *成交明細* ---
+• *{call_action} Call* `{opportunity['callInstrument']}`
+  成交價: `{call_fill:.4f} BTC` ≈ `${call_usd:.0f}` | 手續費: `${opt_fee:.2f}`
+• *{put_action} Put* `{opportunity['putInstrument']}`
+  成交價: `{put_fill:.4f} BTC` ≈ `${put_usd:.0f}` | 手續費: `${opt_fee:.2f}`
+• *{perp_action} Perp* `BTC-PERPETUAL`
+  成交價: `${perp_fill:,.0f}` | 手續費: `${perp_fee:.2f}`
 
-*狀態*:
-  • *執行時間*: {timestamp}
-  • *後續操作*: 永續合約將在期權到期前自動平倉，到期後恢復掃描。
+--- *財務摘要* ---
+• *入場手續費合計*: `${entry_fees_total:.2f}`
+• *預估淨利潤*: `${opportunity['netProfit']:.2f}`（含平倉費估算）
 
-✅ *交易已送出，請至 Deribit 後台確認成交狀態。*
+*期權到期*: {expiry_str}
+*執行時間*: {timestamp}
 """.strip()
-    
+
     logger.info(f"發送交易執行成功通知 (履約價 ${opportunity['strike']})")
     return _send_message(message)
 

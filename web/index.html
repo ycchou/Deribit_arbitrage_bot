@@ -532,7 +532,7 @@ const S = {
   btcPrice: 0, prevBtcPrice: 0,
   fundingRate: 0,
   wsConn: false, wsAuth: false,
-  scanInfo: {}, activePos: null,
+  scanInfo: {}, activePos: null, activePositions: [],
   trades: [],
   system: {},
   priceHistory: [],   // { t, v } last 80 BTC prices for sparkline
@@ -797,12 +797,13 @@ function renderScan() {
   const s = S.scanInfo;
   if (!s || !Object.keys(s).length) return;
 
+  const held = s.positions_held || 0;
+  const heldTag = held > 0 ? ` (持倉 ${held} 組)` : '';
   const pillMap = {
-    position_open:     ['pill pill-blue',   '持倉中，暫停掃描', false],
-    cooling_down:      ['pill pill-orange', '冷卻中…',         false],
-    opportunity_found: ['pill pill-green',  '發現機會！',       true],
-    scanning:          ['pill pill-yellow', '掃描中…',         true],
-    no_opportunity:    ['pill pill-green',  '掃描中，尚無機會', true],
+    cooling_down:      ['pill pill-orange', '失敗冷卻中…',                   false],
+    opportunity_found: ['pill pill-green',  '發現機會！' + heldTag,           true],
+    scanning:          ['pill pill-yellow', '掃描中…' + heldTag,             true],
+    no_opportunity:    ['pill pill-green',  '掃描中，尚無機會' + heldTag,     true],
   };
   const [pillCls, pillTxt, blinking] = pillMap[s.status] || ['pill pill-muted', s.status || '等待中', false];
   $('scan-pill').className = pillCls;
@@ -824,77 +825,43 @@ function renderScan() {
   }
 }
 
-function renderPos() {
-  const div = $('pos-content');
-  if (!S.activePos) {
-    div.innerHTML = '<div class="no-pos">目前無持倉</div>';
-    return;
-  }
-  const pos = S.activePos;
+function renderPosCard(pos) {
   const cd  = countdown(pos.expiry_timestamp);
   const expStr = new Date(pos.expiry_timestamp).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
-
-  // Time progress bar
   const totalDuration = 28 * 3600 * 1000;
   const remaining = Math.max(0, pos.expiry_timestamp - Date.now());
   const progPct = Math.max(0, Math.min(100, (1 - remaining / totalDuration) * 100));
   const progColor = remaining < 60000 ? 'var(--red)' : remaining < 600000 ? 'var(--orange)' : 'var(--green)';
-
-  const statusPillMap = {
-    monitoring:     'pill pill-green',
-    closing_maker:  'pill pill-yellow',
-    closed:         'pill pill-muted',
-  };
+  const statusPillMap = { monitoring: 'pill pill-green', closing_maker: 'pill pill-yellow', closed: 'pill pill-muted' };
   const pillCls = statusPillMap[pos.status] || 'pill pill-muted';
 
-  const strategyLine = pos.strategy_name
-    ? `<div class="kv-item"><div class="kv-label">策略</div><div class="kv-val c-accent">${esc(pos.strategy_name)}${pos.strike ? ' @ $' + pos.strike.toLocaleString() : ''}</div></div>`
-    : '';
-  const callLine = pos.call_instrument
-    ? `<div class="kv-item"><div class="kv-label">Call</div><div class="kv-val" style="font-size:11px">${esc(pos.call_instrument)}</div></div>`
-    : '';
-  const putLine = pos.put_instrument
-    ? `<div class="kv-item"><div class="kv-label">Put</div><div class="kv-val" style="font-size:11px">${esc(pos.put_instrument)}</div></div>`
-    : '';
-  const profitLine = pos.net_profit_est != null
-    ? `<div class="kv-item"><div class="kv-label">預估淨利</div><div class="kv-val c-green">$${(+pos.net_profit_est).toFixed(2)}</div></div>`
-    : '';
-  const marginLine = pos.margin_est
-    ? `<div class="kv-item"><div class="kv-label">保證金</div><div class="kv-val c-yellow">$${Math.round(pos.margin_est).toLocaleString()}</div></div>`
-    : '';
-
-  div.innerHTML = `
-    <div style="margin-bottom:8px">
-      <div class="kv-label">距到期</div>
-      <div class="countdown ${cd.cls}">${cd.text}</div>
-      <div class="prog-wrap">
+  return `
+    <div style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-weight:600;font-size:12px;color:var(--yellow)">${esc(pos.strategy_name || '策略')}${pos.strike ? ' @ $' + pos.strike.toLocaleString() : ''}</span>
+        <span class="${pillCls}" style="font-size:10px"><span class="pill-dot"></span>${esc(pos.status || '—')}</span>
+      </div>
+      <div class="countdown ${cd.cls}" style="font-size:20px;margin-bottom:4px">${cd.text}</div>
+      <div class="prog-wrap" style="margin-bottom:8px">
         <div class="prog-fill" style="width:${progPct}%;background:${progColor}"></div>
       </div>
-    </div>
-    <div class="kv2" style="margin-top:12px">
-      ${strategyLine}
-      ${callLine}
-      ${putLine}
-      <div class="kv-item">
-        <div class="kv-label">部位量</div>
-        <div class="kv-val c-yellow">${pos.amount} BTC</div>
-      </div>
-      ${profitLine}
-      ${marginLine}
-      <div class="kv-item" style="margin-top:6px">
-        <div class="kv-label">狀態</div>
-        <div class="kv-val">
-          <span class="${pillCls}">
-            <span class="pill-dot"></span>
-            ${esc(pos.status || '—')}
-          </span>
-        </div>
-      </div>
-      <div class="kv-item" style="margin-top:6px">
-        <div class="kv-label">到期時間</div>
-        <div class="kv-val" style="font-size:11px;line-height:1.5">${expStr}</div>
+      <div class="kv2">
+        ${pos.call_instrument ? `<div class="kv-item"><div class="kv-label">Call</div><div class="kv-val" style="font-size:10px">${esc(pos.call_instrument)}</div></div>` : ''}
+        ${pos.put_instrument  ? `<div class="kv-item"><div class="kv-label">Put</div><div class="kv-val" style="font-size:10px">${esc(pos.put_instrument)}</div></div>` : ''}
+        <div class="kv-item"><div class="kv-label">數量</div><div class="kv-val c-yellow">${pos.amount} BTC</div></div>
+        ${pos.net_profit_est != null ? `<div class="kv-item"><div class="kv-label">預估淨利</div><div class="kv-val c-green">$${(+pos.net_profit_est).toFixed(2)}</div></div>` : ''}
+        <div class="kv-item"><div class="kv-label">到期</div><div class="kv-val" style="font-size:10px">${expStr}</div></div>
       </div>
     </div>`;
+}
+
+function renderPos() {
+  const div = $('pos-content');
+  if (!S.activePositions.length) {
+    div.innerHTML = '<div class="no-pos">目前無持倉</div>';
+    return;
+  }
+  div.innerHTML = S.activePositions.map(renderPosCard).join('');
 }
 
 function renderKpis() {
@@ -924,27 +891,41 @@ function renderKpis() {
 }
 
 function renderNextTrade() {
-  // Position-based cooldown: bot waits until active position expires
-  if (S.activePos) {
-    const cd = countdown(S.activePos.expiry_timestamp);
-    $('next-label').textContent = '距下次交易';
-    $('kpi-next').textContent = cd.text;
-    $('kpi-next').className   = 'metric-val sm ' + (cd.cls === 'cd-fire' ? 'c-red' : cd.cls === 'cd-warn' ? 'c-orange' : 'c-blue');
-    $('kpi-next-sub').textContent = '持倉中…';
-    return;
-  }
+  const MAX_DAILY = 8;
+  const daily   = S.scanInfo.daily_count ?? null;
+  const cooldown = S.scanInfo.trade_cooldown_remaining_sec ?? 0;
+  const dailyStr = daily != null ? `今日 ${daily}/${MAX_DAILY} 組` : '';
+
+  // 失敗冷卻（優先顯示）
   if (S.scanInfo.status === 'cooling_down') {
     const rem = S.scanInfo.cooldown_remaining_min;
-    $('next-label').textContent = '距下次交易';
+    $('next-label').textContent = '失敗冷卻';
     $('kpi-next').textContent = rem != null ? fmtCountdown(Math.round(rem * 60)) : '…';
     $('kpi-next').className   = 'metric-val sm c-orange';
-    $('kpi-next-sub').textContent = '失敗冷卻中…';
+    $('kpi-next-sub').textContent = dailyStr || '冷卻中…';
     return;
   }
-  $('next-label').textContent = '下次交易';
-  $('kpi-next').textContent = '就緒';
+  // 今日已達上限
+  if (daily !== null && daily >= MAX_DAILY) {
+    $('next-label').textContent = '今日交易次數';
+    $('kpi-next').textContent = `${daily}/${MAX_DAILY}`;
+    $('kpi-next').className   = 'metric-val sm c-red';
+    $('kpi-next-sub').textContent = '今日已達上限';
+    return;
+  }
+  // 組間冷卻中
+  if (cooldown > 0) {
+    $('next-label').textContent = '組間冷卻';
+    $('kpi-next').textContent = fmtCountdown(cooldown);
+    $('kpi-next').className   = 'metric-val sm c-orange';
+    $('kpi-next-sub').textContent = dailyStr;
+    return;
+  }
+  // 就緒
+  $('next-label').textContent = '今日交易';
+  $('kpi-next').textContent = daily != null ? `${daily}/${MAX_DAILY}` : '就緒';
   $('kpi-next').className   = 'metric-val sm c-green';
-  $('kpi-next-sub').textContent = '監控市場中';
+  $('kpi-next-sub').textContent = S.activePositions.length > 0 ? `持倉 ${S.activePositions.length} 組，掃描中` : '監控市場中';
 }
 
 function renderTrades() {
@@ -1051,7 +1032,8 @@ function handle(msg) {
       S.wsConn         = msg.ws_connected;
       S.wsAuth         = msg.ws_authenticated;
       S.scanInfo       = msg.scan_info || {};
-      S.activePos      = msg.active_position;
+      S.activePositions = msg.active_positions || (msg.active_position ? [msg.active_position] : []);
+      S.activePos      = S.activePositions[0] || null;
       S.trades         = msg.trade_history || [];
       S.system         = msg.system || {};
 
@@ -1098,7 +1080,16 @@ function handle(msg) {
 
     case 'active_position':
       S.activePos = msg.position;
+      S.activePositions = msg.position ? [msg.position] : [];
       renderPos();
+      renderNextTrade();
+      break;
+
+    case 'active_positions':
+      S.activePositions = msg.positions || [];
+      S.activePos = S.activePositions[0] || null;
+      renderPos();
+      renderNextTrade();
       break;
 
     case 'trade':
@@ -1127,7 +1118,7 @@ setInterval(() => {
     S.system.uptime_seconds++;
     renderSystem();
   }
-  if (S.activePos) renderPos();
+  if (S.activePositions.length) renderPos();
   renderNextTrade();
   if (S.scanInfo && S.scanInfo.last_scan_time) renderScan();
 }, 1000);

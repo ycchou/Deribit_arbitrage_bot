@@ -55,8 +55,9 @@ class Config:
     EXPIRY_CACHE_SECONDS       = 3600  # 到期日緩存 1 小時
 
     # ── 交易與風險控制 ──────────────────────────────────────────────────────────
-    TRADE_AMOUNT_BTC         = 0.3          # 單次交易單位
-    COOLDOWN_PERIOD_SECONDS  = 28 * 60 * 60 # 28 小時冷卻期
+    TRADE_AMOUNT_BTC         = 0.3  # 單次交易單位
+    MAX_DAILY_TRADES         = 8    # 每日最多開倉次數
+    TRADE_COOLDOWN_SECONDS   = 300  # 組間冷卻（秒）
 
     # 掃描範圍：ATM 前後各幾檔 strike（1 = ±1，2 = ±2）
     STRIKE_SCAN_RANGE        = 2
@@ -70,7 +71,6 @@ class Config:
     MIN_NET_PROFIT_OPPORTUNITY = 20  # 最低淨利潤門檻（美元）
 
     # ── 風險控制 ─────────────────────────────────────────────────────────────────
-    MAX_CONCURRENT_POSITIONS = 1    # 最多同時持有 1 個部位（硬性限制）
     FAILURE_COOLDOWN_SECONDS    = 300  # 下單失敗後 5 分鐘冷卻，避免連續重試
     ENTRY_FILL_TIMEOUT_SECONDS  = 10   # 等待三條腿成交的最長秒數
 

@@ -45,9 +45,9 @@ class DeribitTrader:
         perp_amount_usd = round(amount * strategy['perpOpenPrice'] / 10) * 10
         legs = [
             {'name': strategy['callInstrument'], 'direction': strategy['callDirection'],
-             'price': strategy['callPrice'],      'amount': amount,         'order_type': 'limit'},
+             'price': 0,                          'amount': amount,         'order_type': 'market'},
             {'name': strategy['putInstrument'],  'direction': strategy['putDirection'],
-             'price': strategy['putPrice'],       'amount': amount,         'order_type': 'limit'},
+             'price': 0,                          'amount': amount,         'order_type': 'market'},
             {'name': 'BTC-PERPETUAL',            'direction': perp_dir,
              'price': 0,                          'amount': perp_amount_usd,'order_type': 'market'},
         ]
@@ -103,12 +103,12 @@ class DeribitTrader:
         )
         fill_states = self._wait_all_filled(placed, timeout=Config.ENTRY_FILL_TIMEOUT_SECONDS)
 
-        unfilled = [o for o in placed if fill_states.get(o['order_id']) != 'filled']
-        filled   = [o for o in placed if fill_states.get(o['order_id']) == 'filled']
+        unfilled = [o for o in placed if fill_states.get(o['order_id'], {}).get('state') != 'filled']
+        filled   = [o for o in placed if fill_states.get(o['order_id'], {}).get('state') == 'filled']
 
         if unfilled:
             for o in unfilled:
-                st = fill_states.get(o['order_id'], '?')
+                st = fill_states.get(o['order_id'], {}).get('state', '?')
                 logger.error(f"  ❌ 未成交 ({st}): {o['instrument']}")
             self._cancel_orders(unfilled)
             if filled:
@@ -118,6 +118,8 @@ class DeribitTrader:
             return None
 
         logger.info("✅✅✅ 三條腿全部成交確認")
+        for o in placed:
+            o['avg_price'] = fill_states[o['order_id']].get('avg_price', 0.0)
         return {'success': True, 'orders': placed}
 
     # ── 平倉 ────────────────────────────────────────────────────────────────────
@@ -139,7 +141,7 @@ class DeribitTrader:
         result = self.ws.send_order(
             direction=direction,
             instrument=instrument,
-            amount=abs(position['size']),
+            amount=amount,
             price=price or 0,
             order_type=order_type,
             post_only=post_only,
@@ -178,11 +180,14 @@ class DeribitTrader:
                 state = data.get('order_state', '')
                 if state in ('filled', 'cancelled', 'rejected'):
                     with lock:
-                        results[order_id] = state
+                        results[order_id] = {
+                            'state':     state,
+                            'avg_price': data.get('average_price', 0.0),
+                        }
                     return
                 time.sleep(0.15)
             with lock:
-                results[order_id] = 'timeout'
+                results[order_id] = {'state': 'timeout', 'avg_price': 0.0}
 
         threads = [
             threading.Thread(target=poll_one, args=(o['order_id'],), daemon=True)
@@ -195,7 +200,7 @@ class DeribitTrader:
 
         with lock:
             for o in placed:
-                results.setdefault(o['order_id'], 'timeout')
+                results.setdefault(o['order_id'], {'state': 'timeout', 'avg_price': 0.0})
 
         return results
 
