@@ -127,8 +127,8 @@ def perform_final_check_and_execute(
         final['fill_call_price'] = fill_map.get(final['callInstrument'], 0.0)
         final['fill_put_price']  = fill_map.get(final['putInstrument'],  0.0)
         final['fill_perp_price'] = fill_map.get('BTC-PERPETUAL',         0.0)
-        send_trade_execution_notification(final)
         perp_amount_usd = round(required_amount * final['perpOpenPrice'] / 10) * 10
+        # 先登記部位（確保即使通知失敗，倉位仍被追蹤）
         pos_manager.add_position(
             expiry_timestamp=final['expiryTimestamp'],
             amount=required_amount,
@@ -143,6 +143,10 @@ def perform_final_check_and_execute(
         global_state.daily_trade_count += 1
         global_state.last_trade_time = time.time()
         bot_state.add_trade(final)
+        try:
+            send_trade_execution_notification(final)
+        except Exception as e:
+            logger.error(f'❌ 成交通知發送失敗: {e}', exc_info=True)
         return True
 
     # Fix #8: 記錄下單失敗時間，進入短暫冷卻

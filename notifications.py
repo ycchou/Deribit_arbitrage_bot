@@ -109,7 +109,8 @@ def send_trade_execution_notification(opportunity: Dict) -> bool:
     # ── 期權到期時間（UTC+8）──────────────────────────────────────────────
     expiry_ts = opportunity.get('expiryTimestamp', 0)
     if expiry_ts:
-        expiry_dt  = datetime.fromtimestamp(expiry_ts, tz=_TZ_TAIPEI)
+        # expiryTimestamp 是毫秒，需除以 1000 轉為秒
+        expiry_dt  = datetime.fromtimestamp(expiry_ts / 1000, tz=_TZ_TAIPEI)
         expiry_str = expiry_dt.strftime('%Y-%m-%d %H:%M') + ' UTC+8'
     else:
         expiry_str = opportunity.get('expiryDate', 'N/A')
