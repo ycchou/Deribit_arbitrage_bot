@@ -167,7 +167,10 @@ class PositionManager:
     # ── A2: 倉位核對 ─────────────────────────────────────────────────────────────
 
     def _reconcile_positions(self) -> None:
-        """比對 bot 預期倉位與 Deribit 實際倉位，不符時發送警報。"""
+        """比對 bot 預期倉位與 Deribit 實際倉位。
+        - 全部三腿消失 → 視為已手動平倉，自動移除，發通知
+        - 部分腿消失   → 警報通知（裸倉異常）
+        """
         with self.lock:
             positions = list(self.active_positions)
         if not positions:
@@ -181,16 +184,20 @@ class PositionManager:
         actual_map = {p['instrument_name']: abs(p.get('size', 0)) for p in actual}
 
         for pos in positions:
-            expected = [
-                inst for inst in [
-                    pos.get('call_instrument', ''),
-                    pos.get('put_instrument', ''),
-                    'BTC-PERPETUAL',
-                ] if inst
-            ]
-            missing = [inst for inst in expected if actual_map.get(inst, 0) == 0]
-            if missing:
-                logger.warning(f"⚠️ 倉位核對異常 [{pos.get('call_instrument')}]，以下合約實際倉位為零: {missing}")
-                send_position_mismatch_notification(pos, actual)
+            call_inst = pos.get('call_instrument', '')
+            put_inst  = pos.get('put_instrument', '')
+            legs = [inst for inst in [call_inst, put_inst, 'BTC-PERPETUAL'] if inst]
+            missing = [inst for inst in legs if actual_map.get(inst, 0) == 0]
+
+            if not missing:
+                logger.debug(f"✅ 倉位核對正常 [{call_inst}]")
+                continue
+
+            if len(missing) == len(legs):
+                # 所有腿都已消失 → 手動平倉，自動清除
+                logger.info(f"🧹 偵測到手動平倉 [{call_inst}]，自動移除 bot 部位")
+                self.remove_position(call_inst)
             else:
-                logger.debug(f"✅ 倉位核對正常 [{pos.get('call_instrument')}]")
+                # 部分腿消失 → 裸倉警報
+                logger.warning(f"⚠️ 倉位核對異常 [{call_inst}]，以下合約實際倉位為零: {missing}")
+                send_position_mismatch_notification(pos, actual)
