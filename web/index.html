@@ -835,6 +835,55 @@ function renderPosCard(pos) {
   const statusPillMap = { monitoring: 'pill pill-green', closing_maker: 'pill pill-yellow', closed: 'pill pill-muted' };
   const pillCls = statusPillMap[pos.status] || 'pill pill-muted';
 
+  // ── 成交明細 ────────────────────────────────────────────────────────────────
+  const dirLabel = d => d === 'buy' ? '<span style="color:var(--green)">買入▲</span>' : '<span style="color:var(--red)">賣出▼</span>';
+  const perpDirLabel = d => d === 'long' ? '<span style="color:var(--green)">做多▲</span>' : '<span style="color:var(--red)">做空▼</span>';
+  const hasFill = pos.fill_call_price || pos.fill_put_price || pos.fill_perp_price;
+  const fillSection = hasFill ? `
+    <div style="margin:8px 0 4px;font-size:10px;color:var(--muted);letter-spacing:1px">── 成交明細 ──</div>
+    <table style="width:100%;border-collapse:collapse;font-size:10.5px;line-height:1.6">
+      <tr>
+        <td style="color:var(--muted);width:30px">Call</td>
+        <td>${dirLabel(pos.call_direction)}</td>
+        <td style="color:var(--fg);font-size:9.5px">${esc(pos.call_instrument || '—')}</td>
+        <td style="text-align:right;color:var(--yellow);font-family:monospace">${pos.fill_call_price ? pos.fill_call_price.toFixed(4) + ' BTC' : '—'}</td>
+      </tr>
+      <tr>
+        <td style="color:var(--muted)">Put</td>
+        <td>${dirLabel(pos.put_direction)}</td>
+        <td style="color:var(--fg);font-size:9.5px">${esc(pos.put_instrument || '—')}</td>
+        <td style="text-align:right;color:var(--yellow);font-family:monospace">${pos.fill_put_price ? pos.fill_put_price.toFixed(4) + ' BTC' : '—'}</td>
+      </tr>
+      <tr>
+        <td style="color:var(--muted)">Perp</td>
+        <td>${perpDirLabel(pos.perp_direction)}</td>
+        <td style="color:var(--fg);font-size:9.5px">BTC-PERPETUAL</td>
+        <td style="text-align:right;color:var(--yellow);font-family:monospace">${pos.fill_perp_price ? '$' + pos.fill_perp_price.toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:1}) : '—'}</td>
+      </tr>
+    </table>` : '';
+
+  // ── 損益分析 ────────────────────────────────────────────────────────────────
+  const hasPnl = pos.gross_profit != null && pos.gross_profit !== 0;
+  const fundingSign = pos.funding_direction === '收入' ? '+' : '-';
+  const fundingColor = pos.funding_direction === '收入' ? 'var(--green)' : 'var(--red)';
+  const netProfit = pos.net_profit_est ?? 0;
+  const netColor = netProfit >= 0 ? 'var(--green)' : 'var(--red)';
+  const pnlSection = hasPnl ? `
+    <div style="margin:8px 0 4px;font-size:10px;color:var(--muted);letter-spacing:1px">── 損益分析 ──</div>
+    <div style="display:grid;grid-template-columns:1fr auto;gap:1px 8px;font-size:11px;line-height:1.7">
+      <span style="color:var(--muted)">毛利</span>
+      <span style="font-family:monospace;text-align:right;color:var(--fg)">$${(+pos.gross_profit).toFixed(2)}</span>
+      <span style="color:var(--muted)">手續費(進出場)</span>
+      <span style="font-family:monospace;text-align:right;color:var(--red)">-$${(+pos.total_fees).toFixed(2)}</span>
+      <span style="color:var(--muted)">資金費率(估)</span>
+      <span style="font-family:monospace;text-align:right;color:${fundingColor}">${fundingSign}$${(+pos.funding_cost).toFixed(2)}&nbsp;<span style="font-size:9px">${esc(pos.funding_direction||'')}</span></span>
+      <span style="color:var(--muted);border-top:1px solid var(--border);padding-top:3px">預估淨利</span>
+      <span style="font-family:monospace;text-align:right;font-weight:700;font-size:12px;color:${netColor};border-top:1px solid var(--border);padding-top:3px">${netProfit >= 0 ? '+' : ''}$${netProfit.toFixed(2)}</span>
+    </div>` : `
+    <div class="kv2" style="margin-top:6px">
+      ${netProfit !== 0 ? `<div class="kv-item"><div class="kv-label">預估淨利</div><div class="kv-val" style="color:${netColor};font-weight:700">$${netProfit.toFixed(2)}</div></div>` : ''}
+    </div>`;
+
   return `
     <div style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -845,13 +894,12 @@ function renderPosCard(pos) {
       <div class="prog-wrap" style="margin-bottom:8px">
         <div class="prog-fill" style="width:${progPct}%;background:${progColor}"></div>
       </div>
-      <div class="kv2">
-        ${pos.call_instrument ? `<div class="kv-item"><div class="kv-label">Call</div><div class="kv-val" style="font-size:10px">${esc(pos.call_instrument)}</div></div>` : ''}
-        ${pos.put_instrument  ? `<div class="kv-item"><div class="kv-label">Put</div><div class="kv-val" style="font-size:10px">${esc(pos.put_instrument)}</div></div>` : ''}
-        <div class="kv-item"><div class="kv-label">數量</div><div class="kv-val c-yellow">${pos.amount} BTC</div></div>
-        ${pos.net_profit_est != null ? `<div class="kv-item"><div class="kv-label">預估淨利</div><div class="kv-val c-green">$${(+pos.net_profit_est).toFixed(2)}</div></div>` : ''}
-        <div class="kv-item"><div class="kv-label">到期</div><div class="kv-val" style="font-size:10px">${expStr}</div></div>
+      <div style="display:flex;gap:8px;font-size:11px;color:var(--muted);margin-bottom:4px">
+        <span>數量 <span style="color:var(--yellow)">${pos.amount} BTC</span></span>
+        <span style="flex:1;text-align:right;font-size:10px">${expStr}</span>
       </div>
+      ${fillSection}
+      ${pnlSection}
     </div>`;
 }
 

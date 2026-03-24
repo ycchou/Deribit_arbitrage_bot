@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(pip show:*)",
+      "Bash(pip install:*)",
+      "Bash(grep:*)",
+      "Bash(ssh:*)",
+      "Bash(scp:*)",
+      "Bash(sed:*)"
+    ]
+  }
+}

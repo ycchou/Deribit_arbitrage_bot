@@ -73,7 +73,13 @@ class PositionManager:
                      net_profit: float = 0.0, margin: float = 0.0,
                      strategy_name: str = '', strike: float = 0,
                      call_instrument: str = '', put_instrument: str = '',
-                     perp_amount_usd: float = 0.0) -> None:
+                     perp_amount_usd: float = 0.0,
+                     fill_call_price: float = 0.0, fill_put_price: float = 0.0,
+                     fill_perp_price: float = 0.0,
+                     call_direction: str = '', put_direction: str = '',
+                     perp_direction: str = '',
+                     gross_profit: float = 0.0, total_fees: float = 0.0,
+                     funding_cost: float = 0.0, funding_direction: str = '') -> None:
         pos = {
             'instrument':        'BTC-PERPETUAL',
             'amount':            amount,
@@ -88,6 +94,18 @@ class PositionManager:
             'call_instrument':   call_instrument,
             'put_instrument':    put_instrument,
             'perp_amount_usd':   perp_amount_usd,
+            # 成交明細
+            'fill_call_price':   fill_call_price,
+            'fill_put_price':    fill_put_price,
+            'fill_perp_price':   fill_perp_price,
+            'call_direction':    call_direction,
+            'put_direction':     put_direction,
+            'perp_direction':    perp_direction,
+            # 損益分析
+            'gross_profit':      gross_profit,
+            'total_fees':        total_fees,
+            'funding_cost':      funding_cost,
+            'funding_direction': funding_direction,
         }
         with self.lock:
             self.active_positions.append(pos.copy())

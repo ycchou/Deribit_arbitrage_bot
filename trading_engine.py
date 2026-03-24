@@ -139,6 +139,16 @@ def perform_final_check_and_execute(
             call_instrument=final.get('callInstrument', ''),
             put_instrument=final.get('putInstrument', ''),
             perp_amount_usd=perp_amount_usd,
+            fill_call_price=final['fill_call_price'],
+            fill_put_price=final['fill_put_price'],
+            fill_perp_price=final['fill_perp_price'],
+            call_direction=final.get('callDirection', ''),
+            put_direction=final.get('putDirection', ''),
+            perp_direction=final.get('perpDirection', ''),
+            gross_profit=final.get('grossProfit', 0.0),
+            total_fees=final.get('totalFees', 0.0),
+            funding_cost=final.get('fundingCost', 0.0),
+            funding_direction=final.get('fundingDirection', ''),
         )
         global_state.daily_trade_count += 1
         global_state.last_trade_time = time.time()
