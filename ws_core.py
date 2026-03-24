@@ -23,7 +23,7 @@ from config import Config
 from ws_rpc             import WsRpcMixin
 from ws_subscription    import WsSubscriptionMixin
 from ws_message_handler import WsMessageHandlerMixin
-from notifications import send_ws_disconnected_notification
+from notifications import send_ws_disconnected_notification, send_ws_reconnected_notification
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
         # ── 統計 ────────────────────────────────────────────────────────────
         self.message_count    = 0
         self.last_message_time = 0.0
+        self._has_connected_before = False  # 區分首次啟動 vs 斷線重連
 
         # ── 事件驅動 callback ─────────────────────────────────────────────
         self._on_ticker_update: Optional[Callable[[str], None]] = None
@@ -176,6 +177,10 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
         await self._authenticate()
         await self._flush_pending_subscriptions()
         self.connection_ready.set()
+        if self._has_connected_before:
+            send_ws_reconnected_notification()
+        else:
+            self._has_connected_before = True
 
     async def _authenticate(self) -> None:
         payload = {

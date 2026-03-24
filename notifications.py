@@ -331,3 +331,17 @@ _時間: {timestamp}_
 """.strip()
     logger.warning("⚠️ WebSocket 斷線 Telegram 通知")
     return _send_message(message)
+
+
+def send_ws_reconnected_notification() -> bool:
+    """WebSocket 重新連線成功時發送 Telegram 通知（每次重連都通知）。"""
+    timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
+    message = f"""
+✅ *WebSocket 已重新連線* ✅
+
+機器人已成功重新連接 Deribit，恢復正常掃描運作。
+
+_時間: {timestamp}_
+""".strip()
+    logger.info("✅ WebSocket 重連通知已發送")
+    return _send_message(message)
