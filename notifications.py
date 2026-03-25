@@ -87,30 +87,41 @@ _數據來源: WebSocket 實時訂閱_
     return success
 
 def send_trade_execution_notification(opportunity: Dict) -> bool:
-    """發送成功執行交易的通知，含各腿實際成交價、手續費、期權到期時間。"""
+    """發送成功執行交易的通知，含各腿實際成交價、手續費、損益明細。"""
     timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
 
-    # ── 實際成交價（market order 後由 average_price 填入）──────────────────
-    perp_fill  = opportunity.get('fill_perp_price') or opportunity.get('perpOpenPrice', 0.0)
-    call_fill  = opportunity.get('fill_call_price') or opportunity.get('callPrice', 0.0)
-    put_fill   = opportunity.get('fill_put_price')  or opportunity.get('putPrice',  0.0)
-    amount     = Config.TRADE_AMOUNT_BTC
+    # ── 實際成交價 ────────────────────────────────────────────────────────
+    perp_fill = opportunity.get('fill_perp_price') or opportunity.get('perpOpenPrice', 0.0)
+    call_fill = opportunity.get('fill_call_price') or opportunity.get('callPrice', 0.0)
+    put_fill  = opportunity.get('fill_put_price')  or opportunity.get('putPrice',  0.0)
+    amount    = Config.TRADE_AMOUNT_BTC
 
-    # ── 手續費估算（Deribit taker，市價單）────────────────────────────────
-    # 選擇權：0.03% of underlying per leg
-    # 永續：  0.05% of notional
-    opt_fee  = perp_fill * 0.0003 * amount   # per option leg (USD)
-    perp_fee = perp_fill * 0.0005 * amount   # perp leg (USD)
-    entry_fees_total = opt_fee * 2 + perp_fee
+    # ── 以實際成交價計算各腿進場手續費 ──────────────────────────────────
+    # 選擇權：0.03% × 名義 (option_price_BTC × btc_price × amount)
+    # 永續：  0.05% × 名義 (btc_price × amount)
+    call_entry_fee = call_fill * perp_fill * amount * OPTION_TAKER_FEE_RATE
+    put_entry_fee  = put_fill  * perp_fill * amount * OPTION_TAKER_FEE_RATE
+    perp_entry_fee = perp_fill * amount * PERP_TAKER_FEE_RATE
+    entry_fees     = call_entry_fee + put_entry_fee + perp_entry_fee
 
-    # ── 成交價 USD 換算（選擇權報 BTC，乘以 perp 成交價）─────────────────
+    # ── 從 fill-based 重算結果取得財務合計 ──────────────────────────────
+    # trading_engine 成交後已以實際成交價重跑 calculate_strategy
+    # total_fees = 進場費 + 估算平倉費（均為 taker rate × notional）
+    gross_profit = opportunity.get('grossProfit', 0.0)
+    total_fees   = opportunity.get('totalFees',   0.0)
+    funding_cost = opportunity.get('fundingCost', 0.0)   # 永遠正值
+    funding_dir  = opportunity.get('fundingDirection', '')
+    net_profit   = opportunity.get('netProfit',   0.0)
+    margin       = opportunity.get('margin',      0.0)
+    exit_fee_est = total_fees - entry_fees                # 估算平倉費
+
+    # ── 換算 ─────────────────────────────────────────────────────────────
     call_usd = call_fill * perp_fill
     put_usd  = put_fill  * perp_fill
 
-    # ── 期權到期時間（UTC+8）──────────────────────────────────────────────
+    # ── 期權到期時間（UTC+8）────────────────────────────────────────────
     expiry_ts = opportunity.get('expiryTimestamp', 0)
     if expiry_ts:
-        # expiryTimestamp 是毫秒，需除以 1000 轉為秒
         expiry_dt  = datetime.fromtimestamp(expiry_ts / 1000, tz=_TZ_TAIPEI)
         expiry_str = expiry_dt.strftime('%Y-%m-%d %H:%M') + ' UTC+8'
     else:
@@ -120,6 +131,10 @@ def send_trade_execution_notification(opportunity: Dict) -> bool:
     put_action  = '買入' if opportunity['putDirection']  == 'buy' else '賣出'
     perp_action = '賣出' if opportunity['perpDirection'] == 'short' else '買入'
 
+    net_icon      = '🟢' if net_profit >= 0 else '🔴'
+    funding_sign  = '+' if funding_dir == '收入' else '-'
+    funding_label = f"`{funding_sign}${funding_cost:.2f}` ({funding_dir}，估)"
+
     message = f"""
 🚀 *套利交易已成功執行* 🚀
 
@@ -127,16 +142,19 @@ def send_trade_execution_notification(opportunity: Dict) -> bool:
 
 --- *成交明細* ---
 • *{call_action} Call* `{opportunity['callInstrument']}`
-  成交價: `{call_fill:.4f} BTC` ≈ `${call_usd:.0f}` | 手續費: `${opt_fee:.2f}`
+  成交價: `{call_fill:.4f} BTC` ≈ `${call_usd:.0f}` | 進場費: `${call_entry_fee:.2f}`
 • *{put_action} Put* `{opportunity['putInstrument']}`
-  成交價: `{put_fill:.4f} BTC` ≈ `${put_usd:.0f}` | 手續費: `${opt_fee:.2f}`
+  成交價: `{put_fill:.4f} BTC` ≈ `${put_usd:.0f}` | 進場費: `${put_entry_fee:.2f}`
 • *{perp_action} Perp* `BTC-PERPETUAL`
-  成交價: `${perp_fill:,.0f}` | 手續費: `${perp_fee:.2f}`
+  成交價: `${perp_fill:,.0f}` | 進場費: `${perp_entry_fee:.2f}`
 
---- *財務摘要* ---
-• *入場手續費合計*: `${entry_fees_total:.2f}`
-• *預估淨利潤*: `${opportunity['netProfit']:.2f}`（含平倉費估算）
-• *保證金使用 (估算)*: `${opportunity.get('margin', 0):.0f}`
+--- *財務摘要（以成交價計算）* ---
+• *毛利*: `${gross_profit:+.2f}`
+• *進場手續費*: `-${entry_fees:.2f}`
+• *平倉手續費 (估)*: `-${exit_fee_est:.2f}`
+• *資金費率 (估)*: {funding_label}
+• *預估淨利*: {net_icon} `${net_profit:+.2f}`
+• *保證金使用 (估算)*: `${margin:.0f}`
 
 *期權到期*: {expiry_str}
 *執行時間*: {timestamp}
