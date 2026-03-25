@@ -10,6 +10,7 @@ from typing import Dict
 # 手續費費率常數
 OPTION_TAKER_FEE_RATE = 0.0003
 PERP_TAKER_FEE_RATE   = 0.0005
+PERP_MAKER_FEE_RATE   = -0.0001  # 負值 = 回扣
 
 
 def calculate_strategy(
@@ -20,20 +21,22 @@ def calculate_strategy(
     funding_rate_24h: float, expiry_info: Dict,
     call_instrument: str, put_instrument: str,
     call_direction: str, put_direction: str, perp_direction: str,
+    amount: float = 1.0,
 ) -> Dict:
     """
     計算單一套利策略的詳細損益。
+    amount 為實際交易規模（BTC），所有損益、手續費、保證金均按此規模回報。
     回傳包含 grossProfit, totalFees, fundingCost, netProfit, margin 的 dict。
     """
-    contract_size = 1
+    contract_size = amount
 
     option_premium_diff = call_price - put_price
     perp_strike_diff    = (perp_open_price - strike) / perpetual_price
 
     if strategy_type == 'A':
-        gross_profit = (option_premium_diff - perp_strike_diff) * perpetual_price
+        gross_profit = (option_premium_diff - perp_strike_diff) * perpetual_price * contract_size
     else:
-        gross_profit = (perp_strike_diff - option_premium_diff) * perpetual_price
+        gross_profit = (perp_strike_diff - option_premium_diff) * perpetual_price * contract_size
 
     # ── 手續費計算 ──────────────────────────────────────────────────────────────
     call_notional      = call_price       * perpetual_price * contract_size

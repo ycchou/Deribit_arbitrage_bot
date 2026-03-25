@@ -112,6 +112,7 @@ def perform_final_check_and_execute(
         call_direction  = updated['callDirection'],
         put_direction   = updated['putDirection'],
         perp_direction  = updated['perpDirection'],
+        amount          = required_amount,
     )
 
     if final['netProfit'] < Config.MIN_NET_PROFIT_OPPORTUNITY:
@@ -128,6 +129,45 @@ def perform_final_check_and_execute(
         final['fill_put_price']  = fill_map.get(final['putInstrument'],  0.0)
         final['fill_perp_price'] = fill_map.get('BTC-PERPETUAL',         0.0)
         perp_amount_usd = round(required_amount * final['perpOpenPrice'] / 10) * 10
+
+        # ── 以實際成交價重算損益，覆蓋掃描時的估算值 ─────────────────────────
+        if final['fill_call_price'] and final['fill_put_price'] and final['fill_perp_price']:
+            fill_result = calculate_strategy(
+                strategy_type    = final['strategyType'],
+                strategy_name    = final['strategyName'],
+                call_price       = final['fill_call_price'],
+                put_price        = final['fill_put_price'],
+                perp_open_price  = final['fill_perp_price'],
+                perp_close_price = perp_ticker['last_price'],
+                strike           = final['strike'],
+                perpetual_price  = perp_ticker['last_price'],
+                funding_rate_24h = funding_rate_8h * 3,
+                expiry_info      = expiry_info,
+                call_instrument  = final['callInstrument'],
+                put_instrument   = final['putInstrument'],
+                call_direction   = final['callDirection'],
+                put_direction    = final['putDirection'],
+                perp_direction   = final['perpDirection'],
+                amount           = required_amount,
+            )
+            fill_net = fill_result['netProfit']
+            logger.info(
+                f"📊 成交後實算：掃描淨利 ${final['netProfit']:.2f} → "
+                f"成交後淨利 ${fill_net:.2f}"
+            )
+            if fill_net < 0:
+                logger.warning(
+                    f"⚠️  成交後淨利轉負 (${fill_net:.2f})，"
+                    "成交價與掃描價存在顯著落差，建議檢查流動性。"
+                )
+            # 以 fill-based 數值存入部位，確保前端顯示準確
+            final['grossProfit']     = fill_result['grossProfit']
+            final['totalFees']       = fill_result['totalFees']
+            final['fundingCost']     = fill_result['fundingCost']
+            final['fundingDirection']= fill_result['fundingDirection']
+            final['netProfit']       = fill_net
+            final['margin']          = fill_result['margin']
+
         # 先登記部位（確保即使通知失敗，倉位仍被追蹤）
         pos_manager.add_position(
             expiry_timestamp=final['expiryTimestamp'],

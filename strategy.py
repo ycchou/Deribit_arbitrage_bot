@@ -76,6 +76,7 @@ def check_arbitrage_opportunity(
             perpetual_ticker['best_ask_price'], perpetual_ticker['best_bid_price'],
             strike, perpetual_price, funding_rate_24h, expiry_info,
             call_instrument, put_instrument, 'sell', 'buy', 'long',
+            amount=Config.TRADE_AMOUNT_BTC,
         )
         liquidity_a_ok = all([
             call_ticker['best_bid_amount'] >= Config.TRADE_AMOUNT_BTC,
@@ -90,6 +91,7 @@ def check_arbitrage_opportunity(
             perpetual_ticker['best_bid_price'], perpetual_ticker['best_ask_price'],
             strike, perpetual_price, funding_rate_24h, expiry_info,
             call_instrument, put_instrument, 'buy', 'sell', 'short',
+            amount=Config.TRADE_AMOUNT_BTC,
         )
         liquidity_b_ok = all([
             call_ticker['best_ask_amount'] >= Config.TRADE_AMOUNT_BTC,

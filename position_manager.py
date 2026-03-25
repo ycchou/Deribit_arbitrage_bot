@@ -18,6 +18,7 @@ from bot_state import bot_state
 from state_store import load as load_state, save as save_state
 from closure_strategies import manage_closure
 from notifications import send_position_mismatch_notification
+from profit_calculator import calculate_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,9 @@ class PositionManager:
 
         # A2: 倉位核對計時器
         self._last_reconcile_time: float = 0.0
+
+        # P&L 定時重算計時器（每 30 秒）
+        self._last_pnl_recalc_time: float = 0.0
 
     # ── 生命週期 ────────────────────────────────────────────────────────────────
 
@@ -171,8 +175,17 @@ class PositionManager:
                 except Exception as e:
                     logger.error(f"❌ 管理部位時發生錯誤 [{pos.get('call_instrument')}]: {e}", exc_info=True)
 
-            # A2: 每 60 秒核對一次實際倉位
             now = time.time()
+
+            # 每 30 秒用實際成交價 + 當前 BTC 價重算損益
+            if now - self._last_pnl_recalc_time >= 30:
+                self._last_pnl_recalc_time = now
+                try:
+                    self._recalc_pnl_all()
+                except Exception as e:
+                    logger.error(f"❌ 損益重算失敗: {e}", exc_info=True)
+
+            # A2: 每 60 秒核對一次實際倉位
             if now - self._last_reconcile_time >= 60:
                 self._last_reconcile_time = now
                 try:
@@ -181,6 +194,70 @@ class PositionManager:
                     logger.error(f"❌ 倉位核對失敗: {e}", exc_info=True)
 
             time.sleep(1)
+
+    # ── 損益定時重算 ──────────────────────────────────────────────────────────────
+
+    def _recalc_pnl_all(self) -> None:
+        """用實際成交價 + 當前 BTC 價重算所有持倉的損益，更新前端顯示欄位。"""
+        current_btc = bot_state.btc_price
+        funding_8h  = bot_state.funding_rate
+        if not current_btc:
+            return
+
+        with self.lock:
+            positions = list(self.active_positions)
+
+        updated = False
+        for pos in positions:
+            fill_call = pos.get('fill_call_price')
+            fill_put  = pos.get('fill_put_price')
+            fill_perp = pos.get('fill_perp_price')
+            if not (fill_call and fill_put and fill_perp):
+                continue
+
+            # 從 call_instrument 取出到期日字串，例如 BTC-26MAR26-70000-C → 26MAR26
+            call_inst  = pos.get('call_instrument', '')
+            parts      = call_inst.split('-')
+            date_str   = parts[1] if len(parts) >= 2 else ''
+
+            strategy_type = 'B' if pos.get('call_direction') == 'buy' else 'A'
+            expiry_info   = {
+                'dateStr':   date_str,
+                'fullDate':  date_str,
+                'timestamp': pos['expiry_timestamp'],
+            }
+
+            result = calculate_strategy(
+                strategy_type    = strategy_type,
+                strategy_name    = pos.get('strategy_name', ''),
+                call_price       = fill_call,
+                put_price        = fill_put,
+                perp_open_price  = fill_perp,
+                perp_close_price = current_btc,
+                strike           = pos.get('strike', 0.0),
+                perpetual_price  = current_btc,
+                funding_rate_24h = funding_8h * 3,
+                expiry_info      = expiry_info,
+                call_instrument  = call_inst,
+                put_instrument   = pos.get('put_instrument', ''),
+                call_direction   = pos.get('call_direction', 'buy'),
+                put_direction    = pos.get('put_direction', 'sell'),
+                perp_direction   = pos.get('perp_direction', 'short'),
+                amount           = pos.get('amount', 0.3),
+            )
+
+            pos['gross_profit']    = result['grossProfit']
+            pos['total_fees']      = result['totalFees']
+            pos['funding_cost']    = result['fundingCost']
+            pos['funding_direction'] = result['fundingDirection']
+            pos['net_profit_est']  = result['netProfit']
+            pos['margin_est']      = result['margin']
+            updated = True
+
+        if updated:
+            with self.lock:
+                positions_copy = list(self.active_positions)
+            bot_state.update_active_positions(positions_copy)
 
     # ── A2: 倉位核對 ─────────────────────────────────────────────────────────────
 

@@ -16,6 +16,7 @@ def _now_tw() -> datetime:
     return datetime.now(_TZ_TAIPEI)
 
 from config import Config
+from profit_calculator import OPTION_TAKER_FEE_RATE, PERP_TAKER_FEE_RATE, PERP_MAKER_FEE_RATE
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,7 @@ def send_trade_execution_notification(opportunity: Dict) -> bool:
 --- *財務摘要* ---
 • *入場手續費合計*: `${entry_fees_total:.2f}`
 • *預估淨利潤*: `${opportunity['netProfit']:.2f}`（含平倉費估算）
+• *保證金使用 (估算)*: `${opportunity.get('margin', 0):.0f}`
 
 *期權到期*: {expiry_str}
 *執行時間*: {timestamp}
@@ -162,17 +164,14 @@ def send_startup_notification() -> bool:
 
 
 def send_position_closed_notification(position: Dict, close_method: str) -> bool:
-    """發送部位到期平倉通知，包含保證金使用與預估收益。"""
+    """發送部位平倉通知，含實際平倉價、真實手續費與估算損益。"""
     timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
 
-    entry_time  = position.get('entry_time', 0)
-    duration_s  = int(datetime.utcnow().timestamp() - entry_time) if entry_time else 0
-    hours, rem  = divmod(duration_s, 3600)
-    minutes     = rem // 60
-
-    net_profit  = position.get('net_profit_est', 0.0)
-    margin      = position.get('margin_est', 0.0)
-    profit_icon = '🟢' if net_profit >= 0 else '🔴'
+    entry_time = position.get('entry_time', 0)
+    duration_s = int(datetime.utcnow().timestamp() - entry_time) if entry_time else 0
+    hours, rem = divmod(duration_s, 3600)
+    minutes    = rem // 60
+    margin     = position.get('margin_est', 0.0)
 
     method_label = {
         'maker':   '✅ Maker 限價單成交',
@@ -180,18 +179,70 @@ def send_position_closed_notification(position: Dict, close_method: str) -> bool
         'expired': '⚠️ 已過期（未正常平倉）',
     }.get(close_method, close_method)
 
+    fill_call  = position.get('fill_call_price', 0.0)
+    fill_put   = position.get('fill_put_price', 0.0)
+    fill_perp  = position.get('fill_perp_price', 0.0)
+    close_perp = position.get('close_perp_price')
+    strike     = position.get('strike', 0.0)
+    amount     = position.get('amount', Config.TRADE_AMOUNT_BTC)
+
+    if close_perp and fill_perp and fill_call:
+        # ── 手續費（實際）────────────────────────────────────────────────────
+        entry_option_fee = (fill_call + fill_put) * fill_perp * amount * OPTION_TAKER_FEE_RATE
+        entry_perp_fee   = fill_perp * amount * PERP_TAKER_FEE_RATE
+        entry_fees       = entry_option_fee + entry_perp_fee
+
+        close_fee_rate   = PERP_MAKER_FEE_RATE if close_method == 'maker' else PERP_TAKER_FEE_RATE
+        close_fee        = close_perp * amount * close_fee_rate  # 負值 = maker 回扣
+        total_fees       = entry_fees + close_fee
+
+        # ── 損益（實際平倉價估算）────────────────────────────────────────────
+        # gross = (perp進場 - strike - option淨成本BTC × close價) × 數量
+        actual_gross = (fill_perp - strike - (fill_call - fill_put) * close_perp) * amount
+        perp_pnl     = (fill_perp - close_perp) * amount  # short perp
+        actual_net   = actual_gross - total_fees
+
+        net_icon  = '🟢' if actual_net >= 0 else '🔴'
+        perp_icon = '🟢' if perp_pnl >= 0 else '🔴'
+
+        if close_method == 'maker':
+            close_fee_str = f'`-${abs(close_fee):.2f}` (Maker 回扣)'
+        else:
+            close_fee_str = f'`${close_fee:.2f}` (Taker)'
+
+        pnl_block = f"""
+--- *平倉明細* ---
+• Perp: 進場 `${fill_perp:,.0f}` → 平倉 `${close_perp:,.0f}`
+• Perp 損益: {perp_icon} `${'%+.2f' % perp_pnl}`
+• 期權: 自動結算（以 Deribit index 為準）
+
+--- *手續費（實際）* ---
+• 進場手續費: `${entry_fees:.2f}`
+• 平倉手續費: {close_fee_str}
+• 合計: `${total_fees:.2f}`
+
+--- *估算損益* ---
+• 毛利: `${'%+.2f' % actual_gross}` _(含期權，以平倉價估算)_
+• 淨損益: {net_icon} `${'%+.2f' % actual_net}`"""
+    else:
+        # expired 或資料不足，退回進場時預估值
+        net_profit = position.get('net_profit_est', 0.0)
+        net_icon   = '🟢' if net_profit >= 0 else '🔴'
+        pnl_block  = f"""
+*財務摘要（進場估算）*:
+  • *預估淨收益*: {net_icon} `${net_profit:.2f}`"""
+
     message = f"""
 📦 *部位已平倉* 📦
 
+*{position.get('strategy_name', '')}* @ `${strike:,.0f}` | `{amount} BTC`
 *平倉方式*: {method_label}
 *持倉時長*: {hours}h {minutes}m
 *平倉時間*: {timestamp}
+{pnl_block}
+• *保證金使用（估算）*: `${margin:.0f}`
 
-*財務摘要*:
-  • *使用保證金（估算）*: `${margin:.0f}`
-  • *預估淨收益*: {profit_icon} `${net_profit:.2f}`
-
-⚠️ _收益為開倉時預估值，實際損益以 Deribit 帳戶結算為準。_
+⚠️ _期權損益以平倉時 BTC 價估算，實際以 Deribit 結算為準。_
 """.strip()
 
     logger.info(f"發送平倉通知（{close_method}）")

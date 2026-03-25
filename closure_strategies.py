@@ -97,7 +97,8 @@ def _try_close_maker(manager: 'PositionManager', position: dict) -> None:
     if result and 'order' in result:
         order_id = result['order']['order_id']
         logger.info(f"✅ Maker 平倉單已掛出 [{call_inst}] order_id={order_id}")
-        manager.update_position_fields(call_inst, status='closing_maker', maker_order_id=order_id)
+        manager.update_position_fields(call_inst, status='closing_maker', maker_order_id=order_id,
+                                       close_perp_price=price)
     else:
         logger.error(f"❌ Maker 平倉單失敗 [{call_inst}]: {result}")
 
@@ -147,5 +148,7 @@ def _force_close_taker(manager: 'PositionManager', position: dict) -> None:
     else:
         logger.error(f"❌❌ Taker 強制平倉失敗 [{call_inst}]: {result}")
 
+    manager.update_position_fields(call_inst, close_perp_price=aggressive_price)
+    position['close_perp_price'] = aggressive_price  # 同步更新本地 dict 供通知使用
     send_position_closed_notification(position, 'taker')
     manager.remove_position(call_inst)
