@@ -13,7 +13,7 @@ import time
 from typing import Dict, List, Optional
 
 from config import Config
-from deribit_api import get_tomorrow_expiry, get_target_strikes, get_funding_rate
+from deribit_api import get_available_expiries, get_target_strikes, get_funding_rate
 from strategy import check_arbitrage_opportunity
 from bot_state import bot_state
 from global_state import global_state
@@ -122,42 +122,49 @@ def run_scan(ws_client, trader, pos_manager) -> None:
         else:
             funding_rate_8h = get_funding_rate(ws_client)    # fallback
 
-        expiry_info = get_tomorrow_expiry()
-        if not expiry_info:
+        expiry_list = get_available_expiries()
+        if not expiry_list:
             return
 
-        if expiry_info['dateStr'] != global_state.last_expiry_date:
-            logger.info(f"✅ 目標到期日: {expiry_info['dateStr']} ({expiry_info['fullDate']})")
-            global_state.last_expiry_date = expiry_info['dateStr']
+        expiry_dates = [e['dateStr'] for e in expiry_list]
+        if expiry_dates != getattr(global_state, '_last_expiry_dates', []):
+            logger.info(f"✅ 掃描到期日: {', '.join(expiry_dates)}")
+            global_state._last_expiry_dates = expiry_dates
 
-        # ── 訂閱所需合約 ───────────────────────────────────────────────────────
-        strikes = get_target_strikes(perp_ticker['last_price'], expiry_info['dateStr'])
-        if not strikes:
+        # ── 收集所有到期日的履約價，一次訂閱 ──────────────────────────────
+        expiry_strikes_map: Dict = {}  # {dateStr: (expiry_info, strikes)}
+        all_instruments_needed: List[str] = []
+
+        for expiry_info in expiry_list:
+            strikes = get_target_strikes(perp_ticker['last_price'], expiry_info['dateStr'])
+            if strikes:
+                expiry_strikes_map[expiry_info['dateStr']] = (expiry_info, strikes)
+                for s in strikes:
+                    all_instruments_needed.append(f"BTC-{expiry_info['dateStr']}-{int(s)}-C")
+                    all_instruments_needed.append(f"BTC-{expiry_info['dateStr']}-{int(s)}-P")
+
+        if not expiry_strikes_map:
             return
 
-        instruments_needed = [
-            f"BTC-{expiry_info['dateStr']}-{int(s)}-{side}"
-            for s in strikes
-            for side in ('C', 'P')
-        ]
-        instruments_set = set(instruments_needed) | {'BTC-PERPETUAL'}
+        instruments_set = set(all_instruments_needed) | {'BTC-PERPETUAL'}
         if instruments_set != global_state.current_instruments:
-            ws_client.subscribe_instruments(instruments_needed)
+            ws_client.subscribe_instruments(all_instruments_needed)
             global_state.current_instruments = instruments_set
-            if not ws_client.wait_for_data(instruments_needed, timeout=10):
+            if not ws_client.wait_for_data(all_instruments_needed, timeout=10):
                 logger.warning('⚠️ 部分數據未就緒，繼續執行')
 
-        # ── 掃描套利機會 ────────────────────────────────────────────────────
+        # ── 掃描所有到期日 × 履約價 ─────────────────────────────────────────
         all_opportunities: List[Dict] = []
-        for strike in strikes:
-            result = check_arbitrage_opportunity(
-                strike, expiry_info, ws_client, perp_ticker, funding_rate_8h
-            )
-            if result:
-                if result['strategyA'] and result['strategyA']['netProfit'] > Config.MIN_NET_PROFIT_OPPORTUNITY:
-                    all_opportunities.append(result['strategyA'])
-                if result['strategyB'] and result['strategyB']['netProfit'] > Config.MIN_NET_PROFIT_OPPORTUNITY:
-                    all_opportunities.append(result['strategyB'])
+        for date_str, (expiry_info, strikes) in expiry_strikes_map.items():
+            for strike in strikes:
+                result = check_arbitrage_opportunity(
+                    strike, expiry_info, ws_client, perp_ticker, funding_rate_8h
+                )
+                if result:
+                    if result['strategyA'] and result['strategyA']['netProfit'] > Config.MIN_NET_PROFIT_OPPORTUNITY:
+                        all_opportunities.append(result['strategyA'])
+                    if result['strategyB'] and result['strategyB']['netProfit'] > Config.MIN_NET_PROFIT_OPPORTUNITY:
+                        all_opportunities.append(result['strategyB'])
 
         # ── 更新持倉狀態顯示 ──────────────────────────────────────────────────
         with pos_manager.lock:
@@ -170,7 +177,8 @@ def run_scan(ws_client, trader, pos_manager) -> None:
 
         _common_scan_info = {
             'last_scan_time':             _now,
-            'expiry_date':                expiry_info['dateStr'],
+            'expiry_date':                expiry_dates[0] if expiry_dates else '',
+            'expiry_dates':               expiry_dates,
             'positions_held':             n_positions,
             'daily_count':                global_state.daily_trade_count,
             'trade_cooldown_remaining_sec': round(_cooldown_remaining),

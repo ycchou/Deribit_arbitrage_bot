@@ -57,10 +57,14 @@ class Config:
     # ── 交易與風險控制 ──────────────────────────────────────────────────────────
     TRADE_AMOUNT_BTC         = 0.3  # 單次交易單位
     MAX_DAILY_TRADES         = 8    # 每日最多開倉次數
-    TRADE_COOLDOWN_SECONDS   = 300  # 組間冷卻（秒）
+    TRADE_COOLDOWN_SECONDS   = 60   # 組間冷卻（秒）
 
-    # 掃描範圍：ATM 前後各幾檔 strike（1 = ±1，2 = ±2）
-    STRIKE_SCAN_RANGE        = 2
+    # 掃描範圍：ATM 前後各幾檔 strike（1 = ±1，2 = ±2，4 = ±4）
+    STRIKE_SCAN_RANGE        = 4
+
+    # 到期日掃描窗口
+    EXPIRY_MIN_HOURS         = 4    # 最短到期時間（小時）
+    EXPIRY_MAX_HOURS         = 72   # 最長到期時間（小時）
 
     # ── 部位管理 ────────────────────────────────────────────────────────────────
     POSITION_CLOSE_TRIGGER_SECONDS = 60  # 到期前 60 秒觸發平倉
@@ -71,7 +75,7 @@ class Config:
     MIN_NET_PROFIT_OPPORTUNITY = 20  # 最低淨利潤門檻（美元）
 
     # ── 風險控制 ─────────────────────────────────────────────────────────────────
-    FAILURE_COOLDOWN_SECONDS    = 300  # 下單失敗後 5 分鐘冷卻，避免連續重試
+    FAILURE_COOLDOWN_SECONDS    = 60   # 下單失敗後 1 分鐘冷卻，避免連續重試
     ENTRY_FILL_TIMEOUT_SECONDS  = 10   # 等待三條腿成交的最長秒數
 
     # ── Live Server ─────────────────────────────────────────────────────────────

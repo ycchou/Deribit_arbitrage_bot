@@ -48,7 +48,7 @@ def calculate_strategy(
         call_notional       * OPTION_TAKER_FEE_RATE +
         put_notional        * OPTION_TAKER_FEE_RATE +
         perp_open_notional  * PERP_TAKER_FEE_RATE   +
-        perp_close_notional * PERP_TAKER_FEE_RATE
+        perp_close_notional * PERP_MAKER_FEE_RATE     # 平倉用 post_only maker，享回扣
     )
 
     # ── 資金費率成本 ────────────────────────────────────────────────────────────

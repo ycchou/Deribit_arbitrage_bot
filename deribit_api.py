@@ -8,8 +8,8 @@
   - deribit_funding.py  → get_funding_rate
 """
 
-from deribit_expiry  import get_tomorrow_expiry
+from deribit_expiry  import get_tomorrow_expiry, get_available_expiries
 from deribit_strikes import get_target_strikes
 from deribit_funding import get_funding_rate
 
-__all__ = ['get_tomorrow_expiry', 'get_target_strikes', 'get_funding_rate']
+__all__ = ['get_tomorrow_expiry', 'get_available_expiries', 'get_target_strikes', 'get_funding_rate']

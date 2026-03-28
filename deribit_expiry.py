@@ -8,7 +8,7 @@ import requests
 import time
 import logging
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from config import Config
 from utils import CacheManager
@@ -17,12 +17,13 @@ logger = logging.getLogger(__name__)
 _cache = CacheManager()
 
 
-def get_tomorrow_expiry() -> Optional[Dict]:
+def get_available_expiries() -> List[Dict]:
     """
-    取得明天到期的期權合約日期（帶快取）。
-    回傳 {'dateStr', 'timestamp', 'fullDate'} 或 None。
+    取得在 [+EXPIRY_MIN_HOURS, +EXPIRY_MAX_HOURS) 窗口內所有可用到期日。
+    回傳 List[{'dateStr', 'timestamp', 'fullDate'}]，按到期時間升序排列。
+    結果快取 1 小時。
     """
-    cached = _cache.get('tomorrow_expiry', Config.EXPIRY_CACHE_SECONDS)
+    cached = _cache.get('available_expiries', Config.EXPIRY_CACHE_SECONDS)
     if cached:
         return cached
 
@@ -35,16 +36,16 @@ def get_tomorrow_expiry() -> Optional[Dict]:
         data = response.json()
 
         if 'result' not in data:
-            return None
+            return []
 
-        now               = int(time.time() * 1000)
-        tomorrow          = now + 12 * 60 * 60 * 1000
-        day_after_tomorrow= now + 48 * 60 * 60 * 1000
+        now      = int(time.time() * 1000)
+        min_ts   = now + Config.EXPIRY_MIN_HOURS * 3600 * 1000
+        max_ts   = now + Config.EXPIRY_MAX_HOURS * 3600 * 1000
 
         expiry_map: Dict[str, Dict] = {}
         for instrument in data['result']:
             expiry_ts = instrument['expiration_timestamp']
-            if tomorrow <= expiry_ts < day_after_tomorrow:
+            if min_ts <= expiry_ts < max_ts:
                 parts    = instrument['instrument_name'].split('-')
                 date_str = parts[1]
                 if date_str not in expiry_map:
@@ -54,14 +55,20 @@ def get_tomorrow_expiry() -> Optional[Dict]:
                         'fullDate':  datetime.fromtimestamp(expiry_ts / 1000).strftime('%Y-%m-%d'),
                     }
 
-        result = list(expiry_map.values())[0] if expiry_map else None
+        result = sorted(expiry_map.values(), key=lambda x: x['timestamp'])
         if result:
-            _cache.set('tomorrow_expiry', result)
+            _cache.set('available_expiries', result)
         return result
 
     except requests.RequestException as e:
         logger.error(f'取得到期日失敗（網路）: {e}')
-        return None
+        return []
     except Exception as e:
         logger.error(f'處理到期日數據失敗: {e}')
-        return None
+        return []
+
+
+def get_tomorrow_expiry() -> Optional[Dict]:
+    """向後相容 wrapper：回傳最近一個可用到期日。"""
+    expiries = get_available_expiries()
+    return expiries[0] if expiries else None
