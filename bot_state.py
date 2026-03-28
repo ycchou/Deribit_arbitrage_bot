@@ -135,6 +135,14 @@ class BotState:
             self.last_trade_time = now
         self._push({'type': 'trade', 'trade': entry})
 
+    def update_trade(self, call_instrument: str, **updates) -> None:
+        """依 callInstrument 找到對應交易記錄並更新欄位（例如 closeMethod）。"""
+        with self._lock:
+            for t in reversed(self.trade_history):
+                if t.get('callInstrument') == call_instrument:
+                    t.update(updates)
+                    break
+
     def add_log(self, message: str, level: str = 'INFO') -> None:
         entry = {'time': _tw_time(), 'level': level, 'message': message}
         with self._lock:

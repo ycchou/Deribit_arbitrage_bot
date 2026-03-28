@@ -75,7 +75,7 @@ def send_telegram_notification(opportunity: Dict) -> bool:
 • *預估資金費率*: `{funding_text}` (基於當前費率 {opportunity['fundingRate24h']:.4f}% 估算24H)
 • *所需保證金 (估算)*: `${opportunity['margin']:.0f}`
 
-⚠️ *注意*: 此策略使用永續合約，存在基差風險。永續合約部位需在期權到期時手動平倉。利潤估算已包含平倉費用。
+⚠️ *注意*: 永續合約將在期權到期前自動平倉（Maker 優先，10s 內未成交改市價）。利潤估算已包含平倉費用。
 
 _資料時間: {timestamp}_
 _數據來源: WebSocket 實時訂閱_
@@ -151,7 +151,7 @@ def send_trade_execution_notification(opportunity: Dict) -> bool:
 --- *財務摘要（以成交價計算）* ---
 • *毛利*: `${gross_profit:+.2f}`
 • *進場手續費*: `-${entry_fees:.2f}`
-• *平倉手續費 (估)*: `-${exit_fee_est:.2f}`
+• *平倉手續費 (估)*: `+${abs(exit_fee_est):.2f}` (Maker 回扣)
 • *資金費率 (估)*: {funding_label}
 • *預估淨利*: {net_icon} `${net_profit:+.2f}`
 • *保證金使用 (估算)*: `${margin:.0f}`
@@ -224,9 +224,9 @@ def send_position_closed_notification(position: Dict, close_method: str) -> bool
         perp_icon = '🟢' if perp_pnl >= 0 else '🔴'
 
         if close_method == 'maker':
-            close_fee_str = f'`-${abs(close_fee):.2f}` (Maker 回扣)'
+            close_fee_str = f'`+${abs(close_fee):.2f}` (Maker 回扣)'
         else:
-            close_fee_str = f'`${close_fee:.2f}` (Taker)'
+            close_fee_str = f'`-${close_fee:.2f}` (市價)'
 
         pnl_block = f"""
 --- *平倉明細* ---
@@ -239,8 +239,8 @@ def send_position_closed_notification(position: Dict, close_method: str) -> bool
 • 平倉手續費: {close_fee_str}
 • 合計: `${total_fees:.2f}`
 
---- *估算損益* ---
-• 毛利: `${'%+.2f' % actual_gross}` _(含期權，以平倉價估算)_
+--- *損益（期權以 BTC 價估算）* ---
+• 毛利: `${'%+.2f' % actual_gross}`
 • 淨損益: {net_icon} `${'%+.2f' % actual_net}`"""
     else:
         # expired 或資料不足，退回進場時預估值

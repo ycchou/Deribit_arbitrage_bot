@@ -59,6 +59,7 @@ def manage_closure(manager: 'PositionManager', position: dict) -> None:
                     manager._filled_maker_orders.discard(maker_oid)
             if is_filled:
                 logger.info(f"✅ Maker 平倉已成交 [{call_inst}]")
+                bot_state.update_trade(call_inst, closeMethod='maker')
                 send_position_closed_notification(position, 'maker')
                 manager.remove_position(call_inst)
                 return
@@ -215,6 +216,7 @@ def _force_close_market(manager: 'PositionManager', position: dict) -> None:
         manager.update_position_fields(call_inst, close_perp_price=market_price)
         position['close_perp_price'] = market_price
 
+    bot_state.update_trade(call_inst, closeMethod='taker')
     send_position_closed_notification(position, 'taker')
     manager.remove_position(call_inst)
 
@@ -252,5 +254,6 @@ def _emergency_market_close(manager: 'PositionManager', position: dict) -> None:
     if emergency_price:
         position['close_perp_price'] = emergency_price
 
+    bot_state.update_trade(call_inst, closeMethod='expired')
     send_position_closed_notification(position, 'expired')
     manager.remove_position(call_inst)

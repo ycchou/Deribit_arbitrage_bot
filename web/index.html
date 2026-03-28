@@ -242,7 +242,8 @@
       cursor: pointer; transition: all .15s;
     }
     .pause-btn.paused { border-color: var(--orange); color: var(--orange); }
-    .log-body { height: 240px; overflow-y: auto; padding: 4px 0; }
+    .log-body { height: 240px; overflow-y: auto; padding: 4px 0; transition: height .3s ease; }
+    .log-body.expanded { height: 480px; }
     .ll { padding: 2px 14px; font-size: 12px; font-family: 'JetBrains Mono', 'Fira Code', monospace; white-space: pre-wrap; word-break: break-all; line-height: 1.65; }
     .ll:hover { background: rgba(255,255,255,.025); }
     .lt { color: var(--muted); }
@@ -517,6 +518,7 @@
       <div class="log-controls">
         <span class="log-cnt" id="log-cnt">0 lines</span>
         <button class="pause-btn" id="pause-btn" onclick="togglePause()">⏸ Pause</button>
+        <button class="pause-btn" id="expand-btn" onclick="toggleLogExpand()">↕ 展開</button>
       </div>
     </div>
     <div class="log-body" id="log-body"></div>
@@ -833,7 +835,9 @@ function renderPosCard(pos) {
   const progPct = Math.max(0, Math.min(100, (1 - remaining / totalDuration) * 100));
   const progColor = remaining < 60000 ? 'var(--red)' : remaining < 600000 ? 'var(--orange)' : 'var(--green)';
   const statusPillMap = { monitoring: 'pill pill-green', closing_maker: 'pill pill-yellow', closed: 'pill pill-muted' };
+  const statusLabelMap = { monitoring: '監控中', closing_maker: 'Maker 掛單中', closed: '已平倉' };
   const pillCls = statusPillMap[pos.status] || 'pill pill-muted';
+  const statusLabel = statusLabelMap[pos.status] || pos.status || '—';
 
   // ── 成交明細 ────────────────────────────────────────────────────────────────
   const dirLabel = d => d === 'buy' ? '<span style="color:var(--green)">買入▲</span>' : '<span style="color:var(--red)">賣出▼</span>';
@@ -888,7 +892,7 @@ function renderPosCard(pos) {
     <div style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
         <span style="font-weight:600;font-size:12px;color:var(--yellow)">${esc(pos.strategy_name || '策略')}${pos.strike ? ' @ $' + pos.strike.toLocaleString() : ''}</span>
-        <span class="${pillCls}" style="font-size:10px"><span class="pill-dot"></span>${esc(pos.status || '—')}</span>
+        <span class="${pillCls}" style="font-size:10px"><span class="pill-dot"></span>${esc(statusLabel)}</span>
       </div>
       <div class="countdown ${cd.cls}" style="font-size:20px;margin-bottom:4px">${cd.text}</div>
       <div class="prog-wrap" style="margin-bottom:8px">
@@ -994,6 +998,7 @@ function renderTrades() {
   $('sum-pnl').style.color = total >= 0 ? 'var(--green)' : 'var(--red)';
   $('sum-avg').textContent = (avg>=0?'+':'') + '$' + Math.abs(avg).toFixed(2);
 
+  const closeMethodMap = { maker: '✅ Maker', taker: '⚡ 市價', expired: '📅 緊急' };
   const rows = [...S.trades].reverse().map(t => {
     const p = t.netProfit || 0;
     const pColor = p > 0 ? 'var(--green)' : p < 0 ? 'var(--red)' : 'var(--muted)';
@@ -1001,19 +1006,21 @@ function renderTrades() {
     const badge  = sType
       ? `<span class="strategy-badge strat-${sType.toLowerCase()}">${esc(sType)}</span>`
       : '—';
+    const cm = t.closeMethod ? (closeMethodMap[t.closeMethod] || esc(t.closeMethod)) : '<span style="color:var(--muted)">持倉中</span>';
     return `<tr>
       <td style="color:var(--muted)">${esc(t.time||'—')}</td>
       <td>${badge}</td>
       <td>${esc(t.strategyName||'—')}</td>
       <td>${t.strike ? fmtPrice(t.strike) : '—'}</td>
       <td>${t.expiryDate ? esc(t.expiryDate) : '—'}</td>
+      <td style="font-size:11px">${cm}</td>
       <td style="color:${pColor};font-weight:600">${(p>=0?'+':'') + '$' + Math.abs(p).toFixed(2)}</td>
     </tr>`;
   }).join('');
 
   div.innerHTML = `<table>
     <thead><tr>
-      <th>時間</th><th>類型</th><th>策略 Strategy</th><th>履約價 Strike</th><th>到期日 Expiry</th><th>淨損益 P&amp;L</th>
+      <th>時間</th><th>類型</th><th>策略 Strategy</th><th>履約價 Strike</th><th>到期日 Expiry</th><th>平倉方式</th><th>淨損益 P&amp;L</th>
     </tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
@@ -1025,6 +1032,14 @@ function setLogFilter(level, btn) {
   document.querySelectorAll('.lf-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   rebuildLogView();
+}
+
+function toggleLogExpand() {
+  const body = $('log-body');
+  const btn  = $('expand-btn');
+  body.classList.toggle('expanded');
+  btn.textContent = body.classList.contains('expanded') ? '↕ 收起' : '↕ 展開';
+  if (!logPaused) body.scrollTop = body.scrollHeight;
 }
 
 function togglePause() {
