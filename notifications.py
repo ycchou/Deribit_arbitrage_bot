@@ -192,9 +192,9 @@ def send_position_closed_notification(position: Dict, close_method: str) -> bool
     margin     = position.get('margin_est', 0.0)
 
     method_label = {
-        'maker':   '✅ Maker 限價單成交',
-        'taker':   '⚡️ Taker 強制平倉',
-        'expired': '⚠️ 已過期（未正常平倉）',
+        'maker':   '✅ Maker 限價成交',
+        'taker':   '⚡ 到期前市價沖銷',
+        'expired': '📅 期權到期結算 / 永續緊急市價平倉',
     }.get(close_method, close_method)
 
     fill_call  = position.get('fill_call_price', 0.0)
