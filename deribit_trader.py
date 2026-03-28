@@ -40,9 +40,11 @@ class DeribitTrader:
             f"🚀 執行策略: {strategy['strategyName']} @ ${strategy['strike']} ({amount} BTC)"
         )
 
-        # ── 進場前查 Deribit 實際倉位，防止 bot 未記錄的重複開倉 ──────────────
-        for inst in [strategy['callInstrument'], strategy['putInstrument']]:
-            existing = self.get_position(inst)
+        # ── 進場前查 Deribit 實際倉位，防止 bot 未記錄的重複開倉（並行查詢）──
+        insts = [strategy['callInstrument'], strategy['putInstrument']]
+        with ThreadPoolExecutor(max_workers=2) as pre_pool:
+            existing_positions = list(pre_pool.map(self.get_position, insts))
+        for inst, existing in zip(insts, existing_positions):
             if existing and abs(existing.get('size', 0)) > 0:
                 logger.warning(f"⚠️ 進場前發現 {inst} 已有 Deribit 倉位，取消執行（防重複）")
                 return None
@@ -201,7 +203,7 @@ class DeribitTrader:
                             'avg_price': data.get('average_price', 0.0),
                         }
                     return
-                time.sleep(0.15)
+                time.sleep(0.05)
             with lock:
                 results[order_id] = {'state': 'timeout', 'avg_price': 0.0}
 

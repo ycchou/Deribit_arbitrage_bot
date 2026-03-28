@@ -96,6 +96,10 @@ def perform_final_check_and_execute(
     funding_rate_8h = get_funding_rate(ws_client)
     bot_state.update_funding_rate(funding_rate_8h)   # Fix #6
 
+    # 依實際到期剩餘小時估算資金費率，避免固定 ×3 高估/低估
+    hours_to_expiry = max(1.0, (expiry_info['timestamp'] / 1000 - time.time()) / 3600)
+    funding_rate_for_hold = funding_rate_8h * max(1, hours_to_expiry / 8)
+
     final = calculate_strategy(
         strategy_type   = updated['strategyType'],
         strategy_name   = updated['strategyName'],
@@ -105,7 +109,7 @@ def perform_final_check_and_execute(
         perp_close_price= updated['perpClosePrice'],
         strike          = updated['strike'],
         perpetual_price = perp_ticker['last_price'],
-        funding_rate_24h= funding_rate_8h * 3,
+        funding_rate_24h= funding_rate_for_hold,
         expiry_info     = expiry_info,
         call_instrument = updated['callInstrument'],
         put_instrument  = updated['putInstrument'],
@@ -141,7 +145,7 @@ def perform_final_check_and_execute(
                 perp_close_price = perp_ticker['last_price'],
                 strike           = final['strike'],
                 perpetual_price  = perp_ticker['last_price'],
-                funding_rate_24h = funding_rate_8h * 3,
+                funding_rate_24h = funding_rate_for_hold,
                 expiry_info      = expiry_info,
                 call_instrument  = final['callInstrument'],
                 put_instrument   = final['putInstrument'],
