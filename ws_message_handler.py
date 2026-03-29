@@ -39,10 +39,15 @@ class WsMessageHandlerMixin:
         """處理 RPC 回應（含認證）。"""
         msg_id = data['id']
 
-        # 認證回應
+        # 認證回應：儲存 token 資訊以供自動刷新
         if 'result' in data and isinstance(data['result'], dict):
             if 'access_token' in data['result']:
                 self.is_authenticated = True
+                self._access_token = data['result']['access_token']
+                self._refresh_token = data['result'].get('refresh_token', '')
+                self._token_expires_at = time.time() + data['result'].get('expires_in', 900) - 60
+                logger.info(f'🔐 Token 有效期: {data["result"].get("expires_in", 900)}s，'
+                            f'將於 {int(self._token_expires_at - time.time())}s 後刷新')
                 return
 
         # 一般 RPC Future
@@ -50,7 +55,17 @@ class WsMessageHandlerMixin:
             fut = self._pending_requests.pop(msg_id, None)
         if fut and not fut.done():
             if 'error' in data:
-                fut.set_exception(RuntimeError(str(data['error'])))
+                err = data['error']
+                if isinstance(err, dict):
+                    code = err.get('code', '?')
+                    msg = err.get('message', str(err))
+                    # 偵測 auth 過期，標記需要重新認證
+                    if code == 13009 or 'unauthorized' in str(msg).lower():
+                        self.is_authenticated = False
+                        logger.warning('⚠️ Deribit 回報未授權，token 可能已過期')
+                    fut.set_exception(RuntimeError(f'[{code}] {msg}'))
+                else:
+                    fut.set_exception(RuntimeError(str(err) or 'unknown error'))
             else:
                 fut.set_result(data.get('result'))
 

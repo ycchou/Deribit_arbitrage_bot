@@ -53,6 +53,11 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
         # ── 事件驅動 callback ─────────────────────────────────────────────
         self._on_ticker_update: Optional[Callable[[str], None]] = None
 
+        # ── Auth Token 狀態 ─────────────────────────────────────────────────
+        self._access_token: str    = ''
+        self._refresh_token: str   = ''
+        self._token_expires_at: float = 0.0
+
         # ── 初始化各 Mixin 的私有狀態 ────────────────────────────────────────
         self._init_rpc_state()
         self._init_subscription_state()
@@ -160,6 +165,7 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
                 self._authenticate_then_subscribe(),
                 self._heartbeat(),
                 self._receive_messages(),
+                self._token_refresh_loop(),
             )
 
         # 斷線清理
@@ -201,6 +207,47 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
             logger.info('🔐 WebSocket 私有 API 認證成功')
         else:
             logger.error('❌ WebSocket 認證超時，私有 API 不可用')
+
+    # ── Token 自動刷新 ─────────────────────────────────────────────────────────
+
+    async def _token_refresh_loop(self) -> None:
+        """定期刷新 auth token，在到期前 60 秒刷新。"""
+        while self.is_connected and self.is_running:
+            # 等到認證完成才開始計時
+            if not self.is_authenticated:
+                await asyncio.sleep(1)
+                continue
+            sleep_time = max(10, self._token_expires_at - time.time())
+            await asyncio.sleep(sleep_time)
+            if not self.is_connected:
+                break
+            logger.info('🔄 刷新 Deribit auth token...')
+            refresh_token = self._refresh_token
+            if not refresh_token:
+                # 無 refresh token，重新完整認證
+                self.is_authenticated = False
+                await self._authenticate()
+                continue
+            payload = {
+                'jsonrpc': '2.0',
+                'id': self._next_id(),
+                'method': 'public/auth',
+                'params': {
+                    'grant_type': 'refresh_token',
+                    'refresh_token': refresh_token,
+                },
+            }
+            try:
+                await self.ws.send(json.dumps(payload))
+                # 回應由 _handle_rpc_response 處理，會更新 token 資訊
+                await asyncio.sleep(2)
+                if self.is_authenticated:
+                    logger.info('✅ Token 刷新成功')
+                else:
+                    logger.warning('⚠️ Token 刷新失敗，嘗試重新認證')
+                    await self._authenticate()
+            except Exception as e:
+                logger.error(f'❌ Token 刷新異常: {e}')
 
     # ── 心跳 & 接收 ────────────────────────────────────────────────────────────
 

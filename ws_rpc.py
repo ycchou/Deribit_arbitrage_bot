@@ -11,6 +11,7 @@ Fix #6  _next_id 加鎖，避免高頻下單時 ID 碰撞
 import asyncio
 import json
 import logging
+import time
 import threading
 from concurrent.futures import Future
 from typing import Dict, Optional
@@ -41,6 +42,11 @@ class WsRpcMixin:
         """送出單筆訂單（同步阻塞）。direction: 'buy' | 'sell'"""
         if not self.is_authenticated:
             logger.error('❌ WebSocket 尚未認證，無法下單')
+            return None
+        # 檢查 token 是否已過期
+        if self._token_expires_at > 0 and time.time() > self._token_expires_at:
+            logger.error('❌ Auth token 已過期，無法下單（等待自動刷新）')
+            self.is_authenticated = False
             return None
         params: dict = {
             'instrument_name': instrument,
@@ -123,6 +129,12 @@ class WsRpcMixin:
 
         try:
             return fut.result(timeout=timeout)
+        except TimeoutError:
+            logger.error(f'❌ RPC {method} 超時 ({timeout}s)，'
+                         f'auth={self.is_authenticated}, conn={self.is_connected}')
+            with self._pending_lock:
+                self._pending_requests.pop(msg_id, None)
+            return None
         except Exception as e:
             logger.error(f'❌ RPC {method} 失敗: {e}')
             with self._pending_lock:
