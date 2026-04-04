@@ -88,6 +88,11 @@ class WsSubscriptionMixin:
             for inst in self._user_order_callbacks:
                 self.pending_subscriptions.add(f'user.orders.{inst}.raw')
 
+        # 清除 ticker 更新時間，使 is_data_ready 拒絕過時數據
+        with self.data_lock:
+            self.last_update_time.clear()
+            logger.info(f'🔄 重連：已清除 {len(self.ticker_data)} 個合約的更新時間戳')
+
     async def _flush_pending_subscriptions(self) -> None:
         """連線後將 pending 頻道全部訂閱。"""
         with self._sub_lock:

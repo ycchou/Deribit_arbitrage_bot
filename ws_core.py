@@ -49,6 +49,8 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
         self.message_count    = 0
         self.last_message_time = 0.0
         self._has_connected_before = False  # 區分首次啟動 vs 斷線重連
+        self._reconnect_count = 0
+        self._disconnect_time = 0.0
 
         # ── 事件驅動 callback ─────────────────────────────────────────────
         self._on_ticker_update: Optional[Callable[[str], None]] = None
@@ -129,6 +131,7 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
                     time.time() - self.last_message_time
                     if self.last_message_time else -1
                 ),
+                'reconnect_count':         self._reconnect_count,
             }
 
     # ── 事件循環 ────────────────────────────────────────────────────────────────
@@ -141,10 +144,18 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
                 self.loop.run_until_complete(self._connect_and_run())
             except Exception as e:
                 logger.error(f'❌ WebSocket 事件循環錯誤: {e}')
-                self.connection_ready.clear()
-                if self.is_running:
-                    logger.info(f'⏳ {Config.WS_RECONNECT_DELAY}s 後重連...')
-                    time.sleep(Config.WS_RECONNECT_DELAY)
+            # 斷線後重連
+            self.connection_ready.clear()
+            if self.is_running:
+                self._reconnect_count += 1
+                downtime = ''
+                if self._disconnect_time > 0:
+                    downtime = f'（斷線時長: {time.time() - self._disconnect_time:.1f}s）'
+                logger.info(
+                    f'⏳ {Config.WS_RECONNECT_DELAY}s 後重連... '
+                    f'(第 {self._reconnect_count} 次重連{downtime})'
+                )
+                time.sleep(Config.WS_RECONNECT_DELAY)
 
     async def _connect_and_run(self) -> None:
         # Fix #2: 重連前將已訂閱頻道移回 pending
@@ -157,23 +168,41 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
         ) as ws:
             self.ws           = ws
             self.is_connected = True
+            self._disconnect_time = 0.0
             logger.info('✅ WebSocket 已連接到 Deribit')
 
-            # Fix #auth: _receive_messages 必須與 _authenticate 並行執行，
-            # 否則 auth response 進入 buffer 時沒人讀，導致認證永遠超時。
-            await asyncio.gather(
-                self._authenticate_then_subscribe(),
-                self._heartbeat(),
-                self._receive_messages(),
-                self._token_refresh_loop(),
-            )
+            # _receive_messages 必須與 _authenticate 並行執行，
+            # 否則 auth response 無人讀取，導致認證永遠超時。
+            receiver_task = asyncio.create_task(
+                self._receive_messages(), name='receiver')
+
+            try:
+                await self._authenticate_then_subscribe()
+            except Exception as e:
+                logger.error(f'❌ 認證/訂閱失敗: {e}')
+
+            # 長期運行的輔助 task
+            helper_tasks = [
+                asyncio.create_task(self._heartbeat(), name='heartbeat'),
+                asyncio.create_task(
+                    self._token_refresh_loop(), name='token_refresh'),
+            ]
+
+            # receiver 是連線存活的基準 —— 它結束代表連線已死
+            try:
+                await receiver_task
+            finally:
+                for t in helper_tasks:
+                    t.cancel()
+                await asyncio.gather(*helper_tasks, return_exceptions=True)
 
         # 斷線清理
         self.is_connected     = False
         self.is_authenticated = False
+        self._disconnect_time = time.time()
         self.connection_ready.clear()
         self._flush_pending_requests()   # Fix #4
-        logger.warning('⚠️ WebSocket 連線已關閉')
+        logger.warning('⚠️ WebSocket 連線已關閉，準備重連...')
         send_ws_disconnected_notification()  # A3
 
     # ── 認證 ────────────────────────────────────────────────────────────────────
@@ -217,8 +246,11 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
             if not self.is_authenticated:
                 await asyncio.sleep(1)
                 continue
+            # 短間隔 sleep，確保 cancellation 和 is_connected 檢查能及時生效
             sleep_time = max(10, self._token_expires_at - time.time())
-            await asyncio.sleep(sleep_time)
+            while sleep_time > 0 and self.is_connected:
+                await asyncio.sleep(min(sleep_time, 30))
+                sleep_time = self._token_expires_at - time.time()
             if not self.is_connected:
                 break
             logger.info('🔄 刷新 Deribit auth token...')
@@ -246,6 +278,8 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
                 else:
                     logger.warning('⚠️ Token 刷新失敗，嘗試重新認證')
                     await self._authenticate()
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(f'❌ Token 刷新異常: {e}')
 
@@ -254,16 +288,20 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
     async def _heartbeat(self) -> None:
         while self.is_connected:
             await asyncio.sleep(Config.WS_HEARTBEAT_INTERVAL)
-            if self.ws:
-                try:
-                    await self.ws.send(json.dumps({
-                        'jsonrpc': '2.0',
-                        'id':      self._next_id(),
-                        'method':  'public/test',
-                    }))
-                except Exception as e:
-                    logger.error(f'❌ 心跳失敗: {e}')
-                    break
+            if not self.is_connected or not self.ws:
+                break
+            try:
+                await self.ws.send(json.dumps({
+                    'jsonrpc': '2.0',
+                    'id':      self._next_id(),
+                    'method':  'public/test',
+                }))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f'❌ 心跳失敗: {e}')
+                self.is_connected = False
+                break
 
     async def _receive_messages(self) -> None:
         try:
@@ -272,5 +310,11 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
                 await self._handle_message(data)
                 self.message_count    += 1
                 self.last_message_time = time.time()
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f'❌ 接收訊息錯誤: {e}')
+        finally:
+            # 安全信號：確保其他協程知道連線已死
+            self.is_connected = False
+            logger.info('ℹ️ 接收迴圈已結束，連線標記為斷開')
