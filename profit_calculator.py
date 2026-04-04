@@ -39,14 +39,21 @@ def calculate_strategy(
         gross_profit = (perp_strike_diff - option_premium_diff) * perpetual_price * contract_size
 
     # ── 手續費計算 ──────────────────────────────────────────────────────────────
-    call_notional      = call_price       * perpetual_price * contract_size
-    put_notional       = put_price        * perpetual_price * contract_size
+    # Deribit 期權費 = 0.03% of underlying，cap 12.5% of premium
+    option_underlying  = perpetual_price * contract_size
+    call_premium_usd   = call_price * perpetual_price * contract_size
+    put_premium_usd    = put_price  * perpetual_price * contract_size
+    call_fee = min(option_underlying * OPTION_TAKER_FEE_RATE,
+                   call_premium_usd * 0.125)
+    put_fee  = min(option_underlying * OPTION_TAKER_FEE_RATE,
+                   put_premium_usd  * 0.125)
+
     perp_open_notional = perp_open_price  * contract_size
     perp_close_notional= perp_close_price * contract_size
 
     total_fees = (
-        call_notional       * OPTION_TAKER_FEE_RATE +
-        put_notional        * OPTION_TAKER_FEE_RATE +
+        call_fee +
+        put_fee  +
         perp_open_notional  * PERP_TAKER_FEE_RATE   +
         perp_close_notional * PERP_TAKER_FEE_RATE     # 平倉用市價單，收 Taker 費
     )
