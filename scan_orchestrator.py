@@ -46,7 +46,6 @@ def _notify_opportunity(best: Dict, block_reason: Optional[str]) -> None:
     reason_label = {
         'daily_limit': f'⛔ 今日已達 {Config.MAX_DAILY_TRADES} 組上限，僅供參考',
         'cooldown':    f'⏳ 冷卻中（剩餘 {max(0, Config.TRADE_COOLDOWN_SECONDS - (now - global_state.last_trade_time)):.0f}s），僅供參考',
-        'duplicate':   '⚠️ 同合約已在持倉中，僅供參考',
     }.get(block_reason, f'⚠️ {block_reason}，僅供參考')
 
     send_telegram_notification_with_reason(best, reason_label)
@@ -221,15 +220,6 @@ def run_scan(ws_client, trader, pos_manager) -> None:
                 block_reason = 'cooldown'
                 logger.debug(f"⏳ 組間冷卻中，剩餘 {remaining:.0f}s")
 
-        if can_trade:
-            with pos_manager.lock:
-                open_calls = {p['call_instrument'] for p in pos_manager.active_positions}
-                open_puts  = {p['put_instrument']  for p in pos_manager.active_positions}
-            if best['callInstrument'] in open_calls or best['putInstrument'] in open_puts:
-                can_trade    = False
-                block_reason = 'duplicate'
-                logger.debug(f"⚠️ {best['callInstrument']} 已在持倉中，跳過")
-
         # ── 有機會就通知（不論能否進場）── 用 background thread 避免阻塞交易路徑
         threading.Thread(
             target=_notify_opportunity,
@@ -245,13 +235,6 @@ def run_scan(ws_client, trader, pos_manager) -> None:
             logger.info("⚡️ 其他執行緒正在交易中，跳過本次機會")
             return
         try:
-            # 鎖內雙重確認（防重複開倉同一合約）
-            with pos_manager.lock:
-                open_calls = {p['call_instrument'] for p in pos_manager.active_positions}
-                open_puts  = {p['put_instrument']  for p in pos_manager.active_positions}
-            if best['callInstrument'] in open_calls or best['putInstrument'] in open_puts:
-                logger.info("⚠️ 鎖內確認：同合約已在持倉中，跳過執行")
-                return
             perform_final_check_and_execute(best, ws_client, trader, pos_manager)
         finally:
             global_state._trade_lock.release()
