@@ -9,6 +9,7 @@
 """
 
 import logging
+import threading
 import time
 from typing import Dict, List, Optional
 
@@ -229,8 +230,12 @@ def run_scan(ws_client, trader, pos_manager) -> None:
                 block_reason = 'duplicate'
                 logger.debug(f"⚠️ {best['callInstrument']} 已在持倉中，跳過")
 
-        # ── 有機會就通知（不論能否進場）──────────────────────────────────────
-        _notify_opportunity(best, block_reason if not can_trade else None)
+        # ── 有機會就通知（不論能否進場）── 用 background thread 避免阻塞交易路徑
+        threading.Thread(
+            target=_notify_opportunity,
+            args=(best, block_reason if not can_trade else None),
+            daemon=True,
+        ).start()
 
         if not can_trade:
             return

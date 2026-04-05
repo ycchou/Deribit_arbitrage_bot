@@ -15,6 +15,7 @@ Fix #9  執行前確認無活躍部位（由呼叫方在鎖內雙重確認）
 """
 
 import logging
+import threading
 import time
 from typing import Dict
 
@@ -22,6 +23,7 @@ from config import Config
 from deribit_api import get_funding_rate
 from profit_calculator import calculate_strategy
 from notifications import (
+    _send_message,
     send_trade_execution_notification,
     send_liquidity_issue_notification,
 )
@@ -155,15 +157,43 @@ def perform_final_check_and_execute(
                 amount           = required_amount,
             )
             fill_net = fill_result['netProfit']
+
+            # ── 各腿掃描價 vs 成交價 滑點日誌 ────────────────────────────────
+            scan_call = final.get('callPrice', 0.0)
+            scan_put  = final.get('putPrice', 0.0)
+            scan_perp = final.get('perpOpenPrice', 0.0)
+            slip_call = final['fill_call_price'] - scan_call
+            slip_put  = final['fill_put_price']  - scan_put
+            slip_perp = final['fill_perp_price'] - scan_perp
+            logger.info(
+                f"📊 滑點明細 | Call: 掃描={scan_call:.4f} 成交={final['fill_call_price']:.4f} "
+                f"差={slip_call:+.4f} | Put: 掃描={scan_put:.4f} 成交={final['fill_put_price']:.4f} "
+                f"差={slip_put:+.4f} | Perp: 掃描=${scan_perp:.1f} 成交=${final['fill_perp_price']:.1f} "
+                f"差=${slip_perp:+.1f}"
+            )
             logger.info(
                 f"📊 成交後實算：掃描淨利 ${final['netProfit']:.2f} → "
-                f"成交後淨利 ${fill_net:.2f}"
+                f"成交後淨利 ${fill_net:.2f} (落差 ${fill_net - final['netProfit']:+.2f})"
             )
+
             if fill_net < 0:
                 logger.warning(
                     f"⚠️  成交後淨利轉負 (${fill_net:.2f})，"
                     "成交價與掃描價存在顯著落差，建議檢查流動性。"
                 )
+                # 發送 Telegram 警報（非同步，不阻塞）
+                alert_msg = (
+                    f"⚠️ *滑點警報* ⚠️\n\n"
+                    f"策略: {final['strategyName']} @ ${final['strike']}\n"
+                    f"掃描淨利: ${final['netProfit']:.2f}\n"
+                    f"成交淨利: ${fill_net:.2f}\n"
+                    f"落差: ${fill_net - final['netProfit']:+.2f}\n\n"
+                    f"Call 滑點: {slip_call:+.4f} BTC\n"
+                    f"Put 滑點: {slip_put:+.4f} BTC\n"
+                    f"Perp 滑點: ${slip_perp:+.1f}\n\n"
+                    f"請檢查流動性與執行延遲。"
+                )
+                threading.Thread(target=_send_message, args=(alert_msg,), daemon=True).start()
             # 以 fill-based 數值存入部位，確保前端顯示準確
             final['grossProfit']     = fill_result['grossProfit']
             final['totalFees']       = fill_result['totalFees']

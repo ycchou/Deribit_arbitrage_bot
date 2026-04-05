@@ -40,14 +40,8 @@ class DeribitTrader:
             f"🚀 執行策略: {strategy['strategyName']} @ ${strategy['strike']} ({amount} BTC)"
         )
 
-        # ── 進場前查 Deribit 實際倉位，防止 bot 未記錄的重複開倉（並行查詢）──
-        insts = [strategy['callInstrument'], strategy['putInstrument']]
-        with ThreadPoolExecutor(max_workers=2) as pre_pool:
-            existing_positions = list(pre_pool.map(self.get_position, insts))
-        for inst, existing in zip(insts, existing_positions):
-            if existing and abs(existing.get('size', 0)) > 0:
-                logger.warning(f"⚠️ 進場前發現 {inst} 已有 Deribit 倉位，取消執行（防重複）")
-                return None
+        # 重複開倉檢查已由 scan_orchestrator 在交易鎖內完成（pos_manager 記憶體檢查，微秒級）
+        # 移除原本的 Deribit RPC 倉位預查（2x RPC ≈ 780ms），大幅縮短延遲
 
         perp_dir = 'buy' if strategy['perpDirection'] == 'long' else 'sell'
         # BTC-PERPETUAL 的 amount 單位是 USD（最小 10 USD，須為 10 的倍數）
