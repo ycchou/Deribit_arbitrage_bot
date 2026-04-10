@@ -38,16 +38,24 @@ class WsRpcMixin:
 
     def send_order(self, direction: str, instrument: str, amount: float,
                    price: float, order_type: str = 'limit',
-                   post_only: bool = False) -> Optional[dict]:
-        """送出單筆訂單（同步阻塞）。direction: 'buy' | 'sell'"""
+                   post_only: bool = False) -> dict:
+        """
+        送出單筆訂單（同步阻塞）。direction: 'buy' | 'sell'
+
+        回傳結構化結果：
+          {'status': 'ok',       'order': {...}}                  成功
+          {'status': 'rejected', 'error': '[code] message'}       交易所拒絕
+          {'status': 'timeout',  'error': 'no response'}          RPC 無回應
+          {'status': 'error',    'error': 'auth/state/...'}       其他本地錯誤
+        """
         if not self.is_authenticated:
             logger.error('❌ WebSocket 尚未認證，無法下單')
-            return None
+            return {'status': 'error', 'error': 'not authenticated'}
         # 檢查 token 是否已過期
         if self._token_expires_at > 0 and time.time() > self._token_expires_at:
             logger.error('❌ Auth token 已過期，無法下單（等待自動刷新）')
             self.is_authenticated = False
-            return None
+            return {'status': 'error', 'error': 'token expired'}
         params: dict = {
             'instrument_name': instrument,
             'amount':          amount,
@@ -56,7 +64,13 @@ class WsRpcMixin:
         }
         if post_only:
             params['post_only'] = True
-        return self._rpc_call(f'private/{direction}', params, timeout=8)
+        status, payload = self._rpc_call_ex(f'private/{direction}', params, timeout=3)
+        if status == 'ok' and isinstance(payload, dict) and 'order' in payload:
+            return {'status': 'ok', 'order': payload['order']}
+        if status == 'ok':
+            # 收到回應但結構異常
+            return {'status': 'error', 'error': f'malformed response: {payload!r}'}
+        return {'status': status, 'error': payload}
 
     def cancel_order(self, order_id: str) -> Optional[dict]:
         """取消訂單（同步阻塞）。"""
@@ -93,6 +107,16 @@ class WsRpcMixin:
                                  {'instrument_name': instrument}, timeout=8)
         return result if isinstance(result, list) else []
 
+    def ping_ws(self, timeout: float = 1.0) -> bool:
+        """
+        快速健康度探針：送出 public/test，timeout 內有回應即 True。
+        用於下單前驗證 WebSocket 不是殭屍連線。
+        """
+        if not self.loop or not self.is_connected:
+            return False
+        result = self._rpc_call('public/test', {}, timeout=timeout)
+        return result is not None
+
     # ── 內部工具 ────────────────────────────────────────────────────────────────
 
     def _next_id(self) -> int:
@@ -109,9 +133,21 @@ class WsRpcMixin:
             self._pending_requests.clear()
 
     def _rpc_call(self, method: str, params: dict, timeout: float = 8) -> Optional[dict]:
-        """同步阻塞的 WebSocket RPC 呼叫。"""
+        """同步阻塞的 WebSocket RPC 呼叫（簡化版：失敗統一回 None）。"""
+        status, payload = self._rpc_call_ex(method, params, timeout)
+        return payload if status == 'ok' else None
+
+    def _rpc_call_ex(self, method: str, params: dict, timeout: float = 8):
+        """
+        WebSocket RPC 呼叫 — 區分失敗原因。
+        回傳 (status, payload):
+          ('ok',       result)         成功，payload 為 result
+          ('rejected', '[code] msg')   交易所回 error
+          ('timeout',  'no response')  RPC 無回應
+          ('error',    '...')          其他本地錯誤（disconnect 等）
+        """
         if not self.loop or not self.is_connected:
-            return None
+            return ('error', 'ws not connected')
 
         msg_id  = self._next_id()
         fut: Future = Future()
@@ -119,24 +155,30 @@ class WsRpcMixin:
         with self._pending_lock:
             self._pending_requests[msg_id] = fut
 
-        payload = json.dumps({
+        payload_json = json.dumps({
             'jsonrpc': '2.0',
             'id':      msg_id,
             'method':  method,
             'params':  params,
         })
-        asyncio.run_coroutine_threadsafe(self.ws.send(payload), self.loop)
+        asyncio.run_coroutine_threadsafe(self.ws.send(payload_json), self.loop)
 
         try:
-            return fut.result(timeout=timeout)
+            return ('ok', fut.result(timeout=timeout))
         except TimeoutError:
             logger.error(f'❌ RPC {method} 超時 ({timeout}s)，'
                          f'auth={self.is_authenticated}, conn={self.is_connected}')
             with self._pending_lock:
                 self._pending_requests.pop(msg_id, None)
-            return None
-        except Exception as e:
-            logger.error(f'❌ RPC {method} 失敗: {e}')
+            return ('timeout', 'no response')
+        except ConnectionError as e:
+            logger.error(f'❌ RPC {method} 連線中斷: {e}')
             with self._pending_lock:
                 self._pending_requests.pop(msg_id, None)
-            return None
+            return ('error', f'disconnected: {e}')
+        except Exception as e:
+            # RuntimeError 從 _handle_rpc_response 來 — 代表交易所明確拒絕
+            logger.error(f'❌ RPC {method} 被拒絕: {e}')
+            with self._pending_lock:
+                self._pending_requests.pop(msg_id, None)
+            return ('rejected', str(e))

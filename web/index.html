@@ -877,8 +877,14 @@ function renderPosCard(pos) {
     <div style="display:grid;grid-template-columns:1fr auto;gap:1px 8px;font-size:11px;line-height:1.7">
       <span style="color:var(--muted)">毛利</span>
       <span style="font-family:monospace;text-align:right;color:var(--fg)">$${(+pos.gross_profit).toFixed(2)}</span>
-      <span style="color:var(--muted)">手續費(進出場)</span>
-      <span style="font-family:monospace;text-align:right;color:var(--red)">-$${(+pos.total_fees).toFixed(2)}</span>
+      <span style="color:var(--muted)">Call 手續費</span>
+      <span style="font-family:monospace;text-align:right;color:var(--red)">-$${(+(pos.call_fee||0)).toFixed(2)}</span>
+      <span style="color:var(--muted)">Put 手續費</span>
+      <span style="font-family:monospace;text-align:right;color:var(--red)">-$${(+(pos.put_fee||0)).toFixed(2)}</span>
+      <span style="color:var(--muted)">Perp 手續費</span>
+      <span style="font-family:monospace;text-align:right;color:var(--red)">-$${((+(pos.perp_open_fee||0))+(+(pos.perp_close_fee||0))).toFixed(2)}</span>
+      <span style="color:var(--muted);font-weight:700">手續費合計</span>
+      <span style="font-family:monospace;text-align:right;color:var(--red);font-weight:700">-$${(+pos.total_fees).toFixed(2)}</span>
       <span style="color:var(--muted)">資金費率(估)</span>
       <span style="font-family:monospace;text-align:right;color:${fundingColor}">${fundingSign}$${(+pos.funding_cost).toFixed(2)}&nbsp;<span style="font-size:9px">${esc(pos.funding_direction||'')}</span></span>
       <span style="color:var(--muted);border-top:1px solid var(--border);padding-top:3px">預估淨利</span>
@@ -943,10 +949,10 @@ function renderKpis() {
 }
 
 function renderNextTrade() {
-  const MAX_DAILY = 8;
-  const daily   = S.scanInfo.daily_count ?? null;
+  const MAX_POS  = 8;
+  const posCount = S.scanInfo.position_count ?? S.activePositions.length;
   const cooldown = S.scanInfo.trade_cooldown_remaining_sec ?? 0;
-  const dailyStr = daily != null ? `今日 ${daily}/${MAX_DAILY} 組` : '';
+  const posStr   = `部位 ${posCount}/${MAX_POS}`;
 
   // 失敗冷卻（優先顯示）
   if (S.scanInfo.status === 'cooling_down') {
@@ -954,15 +960,15 @@ function renderNextTrade() {
     $('next-label').textContent = '失敗冷卻';
     $('kpi-next').textContent = rem != null ? fmtCountdown(Math.round(rem * 60)) : '…';
     $('kpi-next').className   = 'metric-val sm c-orange';
-    $('kpi-next-sub').textContent = dailyStr || '冷卻中…';
+    $('kpi-next-sub').textContent = posStr || '冷卻中…';
     return;
   }
-  // 今日已達上限
-  if (daily !== null && daily >= MAX_DAILY) {
-    $('next-label').textContent = '今日交易次數';
-    $('kpi-next').textContent = `${daily}/${MAX_DAILY}`;
+  // 已達部位上限
+  if (posCount >= MAX_POS) {
+    $('next-label').textContent = '持倉部位';
+    $('kpi-next').textContent = `${posCount}/${MAX_POS}`;
     $('kpi-next').className   = 'metric-val sm c-red';
-    $('kpi-next-sub').textContent = '今日已達上限';
+    $('kpi-next-sub').textContent = '已達部位上限';
     return;
   }
   // 組間冷卻中
@@ -970,14 +976,14 @@ function renderNextTrade() {
     $('next-label').textContent = '組間冷卻';
     $('kpi-next').textContent = fmtCountdown(cooldown);
     $('kpi-next').className   = 'metric-val sm c-orange';
-    $('kpi-next-sub').textContent = dailyStr;
+    $('kpi-next-sub').textContent = posStr;
     return;
   }
   // 就緒
-  $('next-label').textContent = '今日交易';
-  $('kpi-next').textContent = daily != null ? `${daily}/${MAX_DAILY}` : '就緒';
+  $('next-label').textContent = '持倉部位';
+  $('kpi-next').textContent = `${posCount}/${MAX_POS}`;
   $('kpi-next').className   = 'metric-val sm c-green';
-  $('kpi-next-sub').textContent = S.activePositions.length > 0 ? `持倉 ${S.activePositions.length} 組，掃描中` : '監控市場中';
+  $('kpi-next-sub').textContent = posCount > 0 ? `持倉 ${posCount} 組，掃描中` : '監控市場中';
 }
 
 function renderTrades() {

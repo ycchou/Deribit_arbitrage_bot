@@ -4,7 +4,7 @@
 掃描協調器：每次 BTC-PERPETUAL ticker 更新時觸發，
 協調冷卻期檢查、行使價訂閱、機會掃描、交易鎖、最終執行。
 
-每日最多 8 組，組間冷卻 5 分鐘。持有部位期間繼續掃描，
+同時最多 8 組並行部位，組間冷卻 60 秒。持有部位期間繼續掃描，
 但達到上限或冷卻中時僅發通知不下單。
 """
 
@@ -44,8 +44,8 @@ def _notify_opportunity(best: Dict, block_reason: Optional[str]) -> None:
         return
 
     reason_label = {
-        'daily_limit': f'⛔ 今日已達 {Config.MAX_DAILY_TRADES} 組上限，僅供參考',
-        'cooldown':    f'⏳ 冷卻中（剩餘 {max(0, Config.TRADE_COOLDOWN_SECONDS - (now - global_state.last_trade_time)):.0f}s），僅供參考',
+        'position_limit': f'⛔ 已達 {Config.MAX_CONCURRENT_POSITIONS} 組部位上限，僅供參考',
+        'cooldown':       f'⏳ 冷卻中（剩餘 {max(0, Config.TRADE_COOLDOWN_SECONDS - (now - global_state.last_trade_time)):.0f}s），僅供參考',
     }.get(block_reason, f'⚠️ {block_reason}，僅供參考')
 
     send_telegram_notification_with_reason(best, reason_label)
@@ -170,7 +170,6 @@ def run_scan(ws_client, trader, pos_manager) -> None:
         with pos_manager.lock:
             n_positions = len(pos_manager.active_positions)
 
-        global_state.check_and_reset_daily()
         _now = time.time()
         _cooldown_remaining = max(0, Config.TRADE_COOLDOWN_SECONDS - (_now - global_state.last_trade_time)) \
             if global_state.last_trade_time > 0 else 0
@@ -180,7 +179,7 @@ def run_scan(ws_client, trader, pos_manager) -> None:
             'expiry_date':                expiry_dates[0] if expiry_dates else '',
             'expiry_dates':               expiry_dates,
             'positions_held':             n_positions,
-            'daily_count':                global_state.daily_trade_count,
+            'position_count':             n_positions,
             'trade_cooldown_remaining_sec': round(_cooldown_remaining),
         }
 
@@ -207,10 +206,10 @@ def run_scan(ws_client, trader, pos_manager) -> None:
         can_trade   = True
         block_reason = None
 
-        if global_state.daily_trade_count >= Config.MAX_DAILY_TRADES:
+        if n_positions >= Config.MAX_CONCURRENT_POSITIONS:
             can_trade    = False
-            block_reason = 'daily_limit'
-            logger.debug(f"📊 已達每日 {Config.MAX_DAILY_TRADES} 組上限，暫停進場")
+            block_reason = 'position_limit'
+            logger.debug(f"📊 已達 {Config.MAX_CONCURRENT_POSITIONS} 組部位上限，暫停進場")
 
         if can_trade:
             cooldown_elapsed = time.time() - global_state.last_trade_time

@@ -83,7 +83,9 @@ class PositionManager:
                      call_direction: str = '', put_direction: str = '',
                      perp_direction: str = '',
                      gross_profit: float = 0.0, total_fees: float = 0.0,
-                     funding_cost: float = 0.0, funding_direction: str = '') -> None:
+                     funding_cost: float = 0.0, funding_direction: str = '',
+                     call_fee: float = 0.0, put_fee: float = 0.0,
+                     perp_open_fee: float = 0.0, perp_close_fee: float = 0.0) -> None:
         pos = {
             'instrument':        'BTC-PERPETUAL',
             'amount':            amount,
@@ -110,6 +112,11 @@ class PositionManager:
             'total_fees':        total_fees,
             'funding_cost':      funding_cost,
             'funding_direction': funding_direction,
+            # 手續費明細
+            'call_fee':          call_fee,
+            'put_fee':           put_fee,
+            'perp_open_fee':     perp_open_fee,
+            'perp_close_fee':    perp_close_fee,
         }
         with self.lock:
             self.active_positions.append(pos.copy())
@@ -227,6 +234,15 @@ class PositionManager:
                 'timestamp': pos['expiry_timestamp'],
             }
 
+            # 資金費率估算：依「剩餘持倉時間」加權，與 trading_engine.py:103 一致
+            # 避免 position_manager 用固定 ×3 覆蓋掉 trading_engine 的加權估算，
+            # 造成前端淨利在成交後 30 秒突然跳變。
+            hours_to_expiry = max(
+                0.0,
+                (pos['expiry_timestamp'] - time.time() * 1000) / 3600000
+            )
+            funding_rate_for_hold = funding_8h * max(1, hours_to_expiry / 8)
+
             result = calculate_strategy(
                 strategy_type    = strategy_type,
                 strategy_name    = pos.get('strategy_name', ''),
@@ -236,7 +252,7 @@ class PositionManager:
                 perp_close_price = current_btc,
                 strike           = pos.get('strike', 0.0),
                 perpetual_price  = current_btc,
-                funding_rate_24h = funding_8h * 3,
+                funding_rate_24h = funding_rate_for_hold,
                 expiry_info      = expiry_info,
                 call_instrument  = call_inst,
                 put_instrument   = pos.get('put_instrument', ''),
@@ -246,12 +262,16 @@ class PositionManager:
                 amount           = pos.get('amount', 0.3),
             )
 
-            pos['gross_profit']    = result['grossProfit']
-            pos['total_fees']      = result['totalFees']
-            pos['funding_cost']    = result['fundingCost']
+            pos['gross_profit']      = result['grossProfit']
+            pos['total_fees']        = result['totalFees']
+            pos['funding_cost']      = result['fundingCost']
             pos['funding_direction'] = result['fundingDirection']
-            pos['net_profit_est']  = result['netProfit']
-            pos['margin_est']      = result['margin']
+            pos['net_profit_est']    = result['netProfit']
+            pos['margin_est']        = result['margin']
+            pos['call_fee']          = result['callFee']
+            pos['put_fee']           = result['putFee']
+            pos['perp_open_fee']     = result['perpOpenFee']
+            pos['perp_close_fee']    = result['perpCloseFee']
             updated = True
 
         if updated:

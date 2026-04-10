@@ -51,12 +51,10 @@ def calculate_strategy(
     perp_open_notional = perp_open_price  * contract_size
     perp_close_notional= perp_close_price * contract_size
 
-    total_fees = (
-        call_fee +
-        put_fee  +
-        perp_open_notional  * PERP_TAKER_FEE_RATE   +
-        perp_close_notional * PERP_TAKER_FEE_RATE     # 平倉用市價單，收 Taker 費
-    )
+    perp_open_fee  = perp_open_notional  * PERP_TAKER_FEE_RATE
+    perp_close_fee = perp_close_notional * PERP_TAKER_FEE_RATE
+
+    total_fees = call_fee + put_fee + perp_open_fee + perp_close_fee
 
     # ── 資金費率成本 ────────────────────────────────────────────────────────────
     funding_cost_abs = perp_open_price * contract_size * abs(funding_rate_24h)
@@ -100,4 +98,8 @@ def calculate_strategy(
         'netProfit':       net_profit,
         'margin':          margin,
         'fundingRate24h':  funding_rate_24h * 100,
+        'callFee':         call_fee,
+        'putFee':          put_fee,
+        'perpOpenFee':     perp_open_fee,
+        'perpCloseFee':    perp_close_fee,
     }

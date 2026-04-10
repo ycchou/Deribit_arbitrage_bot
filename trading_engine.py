@@ -201,6 +201,10 @@ def perform_final_check_and_execute(
             final['fundingDirection']= fill_result['fundingDirection']
             final['netProfit']       = fill_net
             final['margin']          = fill_result['margin']
+            final['callFee']         = fill_result['callFee']
+            final['putFee']          = fill_result['putFee']
+            final['perpOpenFee']     = fill_result['perpOpenFee']
+            final['perpCloseFee']    = fill_result['perpCloseFee']
 
         # 先登記部位（確保即使通知失敗，倉位仍被追蹤）
         pos_manager.add_position(
@@ -223,8 +227,11 @@ def perform_final_check_and_execute(
             total_fees=final.get('totalFees', 0.0),
             funding_cost=final.get('fundingCost', 0.0),
             funding_direction=final.get('fundingDirection', ''),
+            call_fee=final.get('callFee', 0.0),
+            put_fee=final.get('putFee', 0.0),
+            perp_open_fee=final.get('perpOpenFee', 0.0),
+            perp_close_fee=final.get('perpCloseFee', 0.0),
         )
-        global_state.daily_trade_count += 1
         global_state.last_trade_time = time.time()
         bot_state.add_trade(final)
         try:

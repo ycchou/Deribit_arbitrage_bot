@@ -40,6 +40,16 @@ class DeribitTrader:
             f"🚀 執行策略: {strategy['strategyName']} @ ${strategy['strike']} ({amount} BTC)"
         )
 
+        # P0-2: 下單前 WebSocket 健康預檢（防殭屍連線）
+        # 若 WS 表面連著但實際收不到 server 回應，直接放棄本次機會，
+        # 避免 3 腿下單都 timeout、無法驗證是否有幽靈倉位的慘況。
+        if not self.ws.ping_ws(timeout=1.0):
+            logger.error(
+                "🛑 WS 健康預檢失敗（public/test 無回應）— 疑似殭屍連線，放棄本次機會"
+            )
+            # 不發執行失敗通知、不走緊急平倉：因為根本沒送單，完全安全
+            return None
+
         # 重複開倉檢查已由 scan_orchestrator 在交易鎖內完成（pos_manager 記憶體檢查，微秒級）
         # 移除原本的 Deribit RPC 倉位預查（2x RPC ≈ 780ms），大幅縮短延遲
 
@@ -57,8 +67,10 @@ class DeribitTrader:
 
         # ── 步驟 1：三條腿併發下單 ────────────────────────────────────────────
         placed: List[Dict] = []
-        no_response_legs: List[Dict] = []   # 無回應腿（order_id 為 None）
-        api_failed = False
+        no_response_legs: List[Dict] = []   # RPC timeout 的腿（status=timeout，不確定送達與否）
+        rejected_legs:    List[Dict] = []   # 交易所明確拒絕的腿（status=rejected）
+        leg_failed    = False
+        has_rpc_timeout = False   # 只要有一腿 timeout 就算 rpc_timeout，需更嚴謹驗證
 
         def place_leg(leg: dict):
             result = self.ws.send_order(
@@ -74,7 +86,8 @@ class DeribitTrader:
             futures = {pool.submit(place_leg, leg): leg for leg in legs}
             for fut in as_completed(futures):
                 leg, result = fut.result()
-                if result and 'order' in result:
+                status = result.get('status')
+                if status == 'ok' and 'order' in result:
                     order_id = result['order']['order_id']
                     logger.info(f"  ✅ 下單接受: {leg['name']} → order_id={order_id}")
                     placed.append({
@@ -82,31 +95,38 @@ class DeribitTrader:
                         'direction':  leg['direction'],
                         'order_id':   order_id,
                     })
-                else:
-                    err = result.get('message') if result else '無回應'
-                    logger.error(f"  ❌ 下單被 API 拒絕: {leg['name']} → {err}")
-                    api_failed = True
-                    # 無回應不代表未成交，記錄下來稍後驗證實際倉位
+                elif status == 'timeout':
+                    logger.error(f"  ⏱️ 下單 RPC 無回應: {leg['name']}（不確定是否送達）")
+                    leg_failed       = True
+                    has_rpc_timeout  = True
                     no_response_legs.append({
                         'instrument': leg['name'],
                         'direction':  leg['direction'],
                     })
+                else:
+                    err = result.get('error', 'unknown')
+                    logger.error(f"  ❌ 下單被交易所拒絕: {leg['name']} → {err}")
+                    leg_failed = True
+                    rejected_legs.append({
+                        'instrument': leg['name'],
+                        'direction':  leg['direction'],
+                    })
 
-        if api_failed:
-            logger.error("❌ 部分條腿被 API 拒絕，撤銷已掛單並驗證實際倉位...")
+        if leg_failed:
+            fail_reason = 'rpc_timeout' if has_rpc_timeout else 'exchange_rejected'
+            logger.error(
+                f"❌ 部分腿下單失敗 (reason={fail_reason})，撤銷已掛單並驗證實際倉位..."
+            )
             self._cancel_orders(placed)
             # 查所有腿（含無回應腿）的實際倉位，避免遺漏已成交的 ghost order
-            all_to_verify = placed + no_response_legs
-            actually_filled = [
-                o for o in all_to_verify
-                if abs((self.get_position(o['instrument']) or {}).get('size', 0)) > 0
-            ]
+            all_to_verify = placed + no_response_legs + rejected_legs
+            actually_filled = self._verify_filled_with_retry(all_to_verify)
             if actually_filled:
                 logger.warning(
-                    f"🚨 發現 {len(actually_filled)} 條腿已成交（含無回應腿），緊急平倉..."
+                    f"🚨 發現 {len(actually_filled)} 條腿已成交，緊急平倉..."
                 )
                 self._emergency_close_legs(actually_filled)
-            send_execution_failed_notification(strategy, 'api_rejected')
+            send_execution_failed_notification(strategy, fail_reason)
             return None
 
         # ── 步驟 2：等待三條腿全部成交 ────────────────────────────────────────
@@ -216,6 +236,92 @@ class DeribitTrader:
 
         return results
 
+    def _verify_filled_with_retry(self, legs_to_verify: List[Dict]) -> List[Dict]:
+        """
+        驗證這些腿實際上是否有成交（防止 ghost order 造成裸腿）。
+        策略：
+          1) 先正常查 get_position
+          2) 若任一腿回傳 None（RPC timeout），判定 WS 異常 → 強制重連 → 重試 1 次
+          3) 若重試後仍有腿查不到，發出「請手動檢查」警報
+        """
+        def _check(leg: Dict):
+            """回傳 ('filled'|'empty'|'unknown', leg)。"""
+            pos = self.ws.get_position_ws(leg['instrument'])
+            if pos is None:
+                return ('unknown', leg)
+            if abs(pos.get('size', 0)) > 0:
+                return ('filled', leg)
+            return ('empty', leg)
+
+        # 第一次檢查
+        results = [_check(l) for l in legs_to_verify]
+        unknown = [l for s, l in results if s == 'unknown']
+
+        if unknown:
+            logger.error(
+                f"⚠️ 有 {len(unknown)} 條腿的倉位查不到（RPC 無回應）— "
+                f"強制 WS 重連後重試..."
+            )
+            if self._force_reconnect_ws(timeout=15.0):
+                # 重試只查 unknown 腿
+                retry_results = [_check(l) for l in unknown]
+                # 合併結果（已知的保留）
+                known_map = {id(l): s for s, l in results if s != 'unknown'}
+                retry_map = {id(l): s for s, l in retry_results}
+                results = [
+                    (known_map.get(id(l), retry_map.get(id(l), 'unknown')), l)
+                    for l in legs_to_verify
+                ]
+            else:
+                logger.error("❌ 強制重連失敗，無法驗證倉位")
+
+        filled = [l for s, l in results if s == 'filled']
+        still_unknown = [l for s, l in results if s == 'unknown']
+
+        if still_unknown:
+            # 最後防線：至少發 Telegram 告知需手動檢查
+            insts = ', '.join(l['instrument'] for l in still_unknown)
+            logger.error(
+                f"🚨 {len(still_unknown)} 條腿仍無法驗證倉位，"
+                f"請立即登入 Deribit 手動檢查: {insts}"
+            )
+            try:
+                send_emergency_close_failed_notification(
+                    instrument=insts,
+                    size=0,
+                    direction='UNKNOWN — 驗證失敗，請手動核對 Deribit 實際倉位',
+                )
+            except Exception as e:
+                logger.error(f"❌ 手動檢查通知發送失敗: {e}")
+
+        return filled
+
+    def _force_reconnect_ws(self, timeout: float = 15.0) -> bool:
+        """
+        強制 WebSocket 斷線 → 等待自動重連完成 → 驗證健康度。
+        透過把 is_connected 設為 False 並排程 ws.close() 到 event loop，
+        讓 _run_event_loop 走標準重連路徑。
+        """
+        import asyncio as _asyncio
+        logger.warning("🔄 強制重連 WebSocket...")
+        ws = self.ws
+        try:
+            ws.is_connected = False
+            if ws.loop and ws.ws:
+                _asyncio.run_coroutine_threadsafe(ws.ws.close(), ws.loop)
+        except Exception as e:
+            logger.error(f"❌ 強制關閉 WS 時發生例外: {e}")
+
+        # 等待重連完成
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if ws.is_connected and ws.is_authenticated and ws.ping_ws(timeout=1.0):
+                logger.info("✅ WS 強制重連成功")
+                return True
+            time.sleep(0.3)
+        logger.error(f"❌ WS 強制重連逾時（{timeout}s）")
+        return False
+
     def _cancel_orders(self, orders: List[Dict]) -> None:
         """撤銷訂單列表。"""
         for o in orders:
@@ -253,10 +359,11 @@ class DeribitTrader:
                 price=0,
                 order_type='market',
             )
-            if result and 'order' in result:
+            if result.get('status') == 'ok' and 'order' in result:
                 logger.info(
                     f"  ✅ 緊急平倉已送出: {inst} {reverse_dir} {actual_size}"
                 )
             else:
-                logger.error(f"  ❌❌ 緊急平倉失敗: {inst} — 需立即手動處理!")
+                err = result.get('error', 'unknown')
+                logger.error(f"  ❌❌ 緊急平倉失敗: {inst} → {err} — 需立即手動處理!")
                 send_emergency_close_failed_notification(inst, actual_size, reverse_dir)

@@ -56,7 +56,7 @@ class Config:
 
     # ── 交易與風險控制 ──────────────────────────────────────────────────────────
     TRADE_AMOUNT_BTC         = 0.3  # 單次交易單位
-    MAX_DAILY_TRADES         = 8    # 每日最多開倉次數
+    MAX_CONCURRENT_POSITIONS = 8    # 同時最多持倉組數
     TRADE_COOLDOWN_SECONDS   = 60   # 組間冷卻（秒）
 
     # 掃描範圍：ATM 前後各幾檔 strike（1 = ±1，2 = ±2，4 = ±4）
@@ -72,7 +72,7 @@ class Config:
 
     # ── 掃描設定 ────────────────────────────────────────────────────────────────
     SCAN_INTERVAL_SECONDS      = 1   # 主循環等待時間（秒），事件驅動後僅作兜底
-    MIN_NET_PROFIT_OPPORTUNITY = 30  # 最低淨利潤門檻（美元）；包含市場衝擊/滑點緩衝
+    MIN_NET_PROFIT_OPPORTUNITY = 45  # 最低淨利潤門檻（美元）；包含市場衝擊/滑點緩衝
 
     # ── 風險控制 ─────────────────────────────────────────────────────────────────
     FAILURE_COOLDOWN_SECONDS    = 60   # 下單失敗後 1 分鐘冷卻，避免連續重試

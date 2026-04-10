@@ -15,6 +15,7 @@ import json
 import logging
 import threading
 import time
+from concurrent.futures import Future
 from typing import Callable, Dict, Optional
 
 import websockets
@@ -286,22 +287,69 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
     # ── 心跳 & 接收 ────────────────────────────────────────────────────────────
 
     async def _heartbeat(self) -> None:
+        """
+        心跳機制：定期送出 public/test 並**等待回應**，連續 2 次無回應
+        即判定為殭屍連線，主動關閉以觸發重連。
+
+        修復原因：舊版只檢查 send() 是否成功，若 server 沒回應但 TCP 沒斷，
+        會形成半死狀態，導致所有 RPC 都 timeout 但 is_connected 還是 True。
+        """
+        consecutive_failures = 0
+        max_failures = 2
+        response_timeout = 5.0
+
         while self.is_connected:
             await asyncio.sleep(Config.WS_HEARTBEAT_INTERVAL)
             if not self.is_connected or not self.ws:
                 break
+
+            msg_id = self._next_id()
+            fut: Future = Future()
+            with self._pending_lock:
+                self._pending_requests[msg_id] = fut
+
             try:
                 await self.ws.send(json.dumps({
                     'jsonrpc': '2.0',
-                    'id':      self._next_id(),
+                    'id':      msg_id,
                     'method':  'public/test',
                 }))
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(f'❌ 心跳失敗: {e}')
+                logger.error(f'❌ 心跳送出失敗: {e}')
+                with self._pending_lock:
+                    self._pending_requests.pop(msg_id, None)
                 self.is_connected = False
                 break
+
+            # 等待 public/test 回應（在 event loop 內用 asyncio 包裝 concurrent Future）
+            try:
+                await asyncio.wait_for(
+                    asyncio.wrap_future(fut),
+                    timeout=response_timeout,
+                )
+                if consecutive_failures > 0:
+                    logger.info(f'✅ 心跳恢復（連續失敗 {consecutive_failures} 次後復原）')
+                consecutive_failures = 0
+            except (asyncio.TimeoutError, Exception) as e:
+                consecutive_failures += 1
+                with self._pending_lock:
+                    self._pending_requests.pop(msg_id, None)
+                logger.warning(
+                    f'⚠️ 心跳無回應 ({consecutive_failures}/{max_failures}) — '
+                    f'{"timeout" if isinstance(e, asyncio.TimeoutError) else repr(e)}'
+                )
+                if consecutive_failures >= max_failures:
+                    logger.error(
+                        '❌ 心跳連續無回應 — 判定殭屍連線，主動關閉以觸發重連'
+                    )
+                    self.is_connected = False
+                    try:
+                        await self.ws.close()
+                    except Exception:
+                        pass
+                    break
 
     async def _receive_messages(self) -> None:
         try:

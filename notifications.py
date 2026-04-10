@@ -16,7 +16,10 @@ def _now_tw() -> datetime:
     return datetime.now(_TZ_TAIPEI)
 
 from config import Config
-from profit_calculator import OPTION_TAKER_FEE_RATE, PERP_TAKER_FEE_RATE, PERP_MAKER_FEE_RATE
+from profit_calculator import (
+    OPTION_TAKER_FEE_RATE, PERP_TAKER_FEE_RATE, PERP_MAKER_FEE_RATE,
+    calculate_strategy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,11 +99,11 @@ def send_trade_execution_notification(opportunity: Dict) -> bool:
     put_fill  = opportunity.get('fill_put_price')  or opportunity.get('putPrice',  0.0)
     amount    = Config.TRADE_AMOUNT_BTC
 
-    # ── 以實際成交價計算各腿進場手續費 ──────────────────────────────────
-    # 選擇權：0.03% × 名義 (option_price_BTC × btc_price × amount)
-    # 永續：  0.05% × 名義 (btc_price × amount)
-    call_entry_fee = call_fill * perp_fill * amount * OPTION_TAKER_FEE_RATE
-    put_entry_fee  = put_fill  * perp_fill * amount * OPTION_TAKER_FEE_RATE
+    # ── 以實際成交價計算各腿進場手續費（含 12.5% premium cap）────────────
+    call_notional  = call_fill * perp_fill * amount
+    put_notional   = put_fill  * perp_fill * amount
+    call_entry_fee = min(call_notional * OPTION_TAKER_FEE_RATE, call_notional * 0.125)
+    put_entry_fee  = min(put_notional  * OPTION_TAKER_FEE_RATE, put_notional  * 0.125)
     perp_entry_fee = perp_fill * amount * PERP_TAKER_FEE_RATE
     entry_fees     = call_entry_fee + put_entry_fee + perp_entry_fee
 
@@ -151,7 +154,7 @@ def send_trade_execution_notification(opportunity: Dict) -> bool:
 --- *財務摘要（以成交價計算）* ---
 • *毛利*: `${gross_profit:+.2f}`
 • *進場手續費*: `-${entry_fees:.2f}`
-• *平倉手續費 (估)*: `+${abs(exit_fee_est):.2f}` (Maker 回扣)
+• *平倉手續費 (估)*: `-${abs(exit_fee_est):.2f}` (Taker 估算)
 • *資金費率 (估)*: {funding_label}
 • *預估淨利*: {net_icon} `${net_profit:+.2f}`
 • *保證金使用 (估算)*: `${margin:.0f}`
@@ -205,20 +208,81 @@ def send_position_closed_notification(position: Dict, close_method: str) -> bool
     amount     = position.get('amount', Config.TRADE_AMOUNT_BTC)
 
     if close_perp and fill_perp and fill_call:
-        # ── 手續費（實際）────────────────────────────────────────────────────
-        entry_option_fee = (fill_call + fill_put) * fill_perp * amount * OPTION_TAKER_FEE_RATE
-        entry_perp_fee   = fill_perp * amount * PERP_TAKER_FEE_RATE
-        entry_fees       = entry_option_fee + entry_perp_fee
+        # ── 使用 profit_calculator 做真相來源的重算 ──────────────────────────
+        # 與 position_manager / trading_engine / 前端完全同源，避免多套公式
+        # 不一致（H1a/H1b/H1d）。關鍵參數：
+        #   • perp_close_price = close_perp（實際平倉價）
+        #   • perpetual_price  = close_perp（以平倉價估值期權 BTC 成本）
+        #   • funding_rate_24h = 實際持倉時長加權
+        strategy_type = 'B' if position.get('call_direction') == 'buy' else 'A'
+        call_inst     = position.get('call_instrument', '')
+        date_str      = call_inst.split('-')[1] if len(call_inst.split('-')) >= 2 else ''
+        expiry_ts     = position.get('expiry_timestamp', 0)
 
-        close_fee_rate   = PERP_MAKER_FEE_RATE if close_method == 'maker' else PERP_TAKER_FEE_RATE
-        close_fee        = close_perp * amount * close_fee_rate  # 負值 = maker 回扣
-        total_fees       = entry_fees + close_fee
+        # 依「實際持倉時長」加權資金費率（與 trading_engine.py:103 / position_manager 一致）
+        # 使用 bot_state 的當下費率做近似（真實應為時間積分，但未追蹤歷史費率）
+        try:
+            from bot_state import bot_state as _bs
+            funding_rate_8h = float(_bs.funding_rate or 0.0)
+        except Exception:
+            funding_rate_8h = 0.0
+        hold_hours        = max(0, duration_s) / 3600
+        funding_rate_hold = funding_rate_8h * max(1, hold_hours / 8)
 
-        # ── 損益（實際平倉價估算）────────────────────────────────────────────
-        # gross = (perp進場 - strike - option淨成本BTC × close價) × 數量
-        actual_gross = (fill_perp - strike - (fill_call - fill_put) * close_perp) * amount
-        perp_pnl     = (fill_perp - close_perp) * amount  # short perp
-        actual_net   = actual_gross - total_fees
+        expiry_info = {
+            'dateStr':   date_str,
+            'fullDate':  date_str,
+            'timestamp': expiry_ts,
+        }
+
+        result = calculate_strategy(
+            strategy_type    = strategy_type,
+            strategy_name    = position.get('strategy_name', ''),
+            call_price       = fill_call,
+            put_price        = fill_put,
+            perp_open_price  = fill_perp,
+            perp_close_price = close_perp,
+            strike           = strike,
+            perpetual_price  = close_perp,
+            funding_rate_24h = funding_rate_hold,
+            expiry_info      = expiry_info,
+            call_instrument  = call_inst,
+            put_instrument   = position.get('put_instrument', ''),
+            call_direction   = position.get('call_direction', 'buy'),
+            put_direction    = position.get('put_direction', 'sell'),
+            perp_direction   = position.get('perp_direction', 'short'),
+            amount           = amount,
+        )
+
+        # calculate_strategy 預設 perp 進出場都 taker，maker 平倉時需扣除
+        # 原本的 close taker 費，改加 maker 費率（負值 = 回扣）。
+        perp_close_notional = close_perp * amount
+        close_fee_taker     = perp_close_notional * PERP_TAKER_FEE_RATE
+        if close_method == 'maker':
+            close_fee = perp_close_notional * PERP_MAKER_FEE_RATE  # 負 = 回扣
+            total_fees_adjusted = result['totalFees'] - close_fee_taker + close_fee
+        else:
+            close_fee = close_fee_taker
+            total_fees_adjusted = result['totalFees']
+
+        # 進場費 = 總費 - 平倉費（便於顯示拆解）
+        entry_fees = total_fees_adjusted - close_fee
+
+        # 毛利 / funding 直接用 calculate_strategy 的結果（方向自動依 strategy_type 處理）
+        actual_gross     = result['grossProfit']
+        funding_cost_abs = result['fundingCost']
+        funding_dir      = result['fundingDirection']
+        funding_signed   = funding_cost_abs if funding_dir == '支付' else -funding_cost_abs
+        funding_sign_str = '-' if funding_dir == '支付' else '+'
+
+        # 淨損益（對齊 profit_calculator:71 的邏輯）
+        actual_net = actual_gross - total_fees_adjusted - funding_signed
+
+        # Perp 單腿損益：依實際方向計算（short: open-close, long: close-open）
+        if position.get('perp_direction') == 'long':
+            perp_pnl = (close_perp - fill_perp) * amount
+        else:
+            perp_pnl = (fill_perp - close_perp) * amount
 
         net_icon  = '🟢' if actual_net >= 0 else '🔴'
         perp_icon = '🟢' if perp_pnl >= 0 else '🔴'
@@ -226,21 +290,22 @@ def send_position_closed_notification(position: Dict, close_method: str) -> bool
         if close_method == 'maker':
             close_fee_str = f'`+${abs(close_fee):.2f}` (Maker 回扣)'
         else:
-            close_fee_str = f'`-${close_fee:.2f}` (市價)'
+            close_fee_str = f'`-${close_fee:.2f}` (Taker 市價)'
 
         pnl_block = f"""
 --- *平倉明細* ---
 • Perp: 進場 `${fill_perp:,.0f}` → 平倉 `${close_perp:,.0f}`
 • Perp 損益: {perp_icon} `${'%+.2f' % perp_pnl}`
-• 期權: 自動結算（以 Deribit index 為準）
+• 期權: 持有至到期，由 Deribit 以 index price 結算
 
 --- *手續費（實際）* ---
-• 進場手續費: `${entry_fees:.2f}`
+• 進場手續費: `-${entry_fees:.2f}`
 • 平倉手續費: {close_fee_str}
-• 合計: `${total_fees:.2f}`
+• 合計: `-${total_fees_adjusted:.2f}`
 
---- *損益（期權以 BTC 價估算）* ---
+--- *損益* ---
 • 毛利: `${'%+.2f' % actual_gross}`
+• 資金費率: `{funding_sign_str}${funding_cost_abs:.2f}` ({funding_dir})
 • 淨損益: {net_icon} `${'%+.2f' % actual_net}`"""
     else:
         # expired 或資料不足，退回進場時預估值
@@ -299,23 +364,36 @@ _偵測時間: {timestamp}_
 # ── B3: 執行失敗通知 ─────────────────────────────────────────────────────────────
 
 def send_execution_failed_notification(strategy: dict, reason: str) -> bool:
-    """三腿下單後因超時或 API 拒絕而失敗時，發送 Telegram 通知。"""
+    """三腿下單後因超時、API 拒絕或 RPC 無回應而失敗時，發送 Telegram 通知。"""
     timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
     reason_label = {
-        'timeout':      '⏰ 成交超時（部分腿未在規定時間內成交）',
-        'api_rejected': '🚫 API 拒絕（部分腿下單被交易所拒絕）',
+        'timeout':            '⏰ 成交超時（部分腿未在規定時間內成交）',
+        'exchange_rejected':  '🚫 交易所拒絕（訂單被 Deribit 回報 error）',
+        'rpc_timeout':        '📡 RPC 無回應（本地 WebSocket 未收到下單回應，疑似殭屍連線）',
+        # 向後相容：舊的 api_rejected 標籤繼續能顯示
+        'api_rejected':       '🚫 API 拒絕（部分腿下單被交易所拒絕）',
     }.get(reason, reason)
+
+    # RPC timeout 情境下，因本地沒收到回應，無法百分之百確定是否有單真的送達，
+    # 需要特別警告使用者手動核對倉位。
+    extra_warning = ''
+    if reason == 'rpc_timeout':
+        extra_warning = (
+            "\n⚠️ *注意*：本地未收到交易所回應，機器人已嘗試強制重連並驗證倉位。"
+            "若仍不放心，*請登入 Deribit 後台人工確認倉位是否與預期一致*。"
+        )
+
     message = f"""
 ⚠️ *套利執行失敗* ⚠️
 
-機器人嘗試執行以下套利交易，但未能完成，已自動撤單並緊急平倉。
+機器人嘗試執行以下套利交易，但未能完成，已自動撤單並驗證倉位。
 
 *策略*: {strategy.get('strategyName', 'N/A')}
 *履約價*: `${strategy.get('strike', 'N/A')}`
 *到期日*: {strategy.get('expiryDate', 'N/A')}
 *預估淨利*: `${strategy.get('netProfit', 0):.2f}`
 
-*失敗原因*: {reason_label}
+*失敗原因*: {reason_label}{extra_warning}
 
 _時間: {timestamp}_
 """.strip()
