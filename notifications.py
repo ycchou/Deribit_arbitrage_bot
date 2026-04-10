@@ -74,7 +74,10 @@ def send_telegram_notification(opportunity: Dict) -> bool:
 --- *財務分析* ---
 • *預估淨利潤*: `${opportunity['netProfit']:.2f}`
 • *理論利潤*: `${opportunity['grossProfit']:.2f}`
-• *估計總手續費*: `${opportunity['totalFees']:.2f}` (含永續合約平倉費)
+• *Call 手續費*: `-${opportunity.get('callFee', 0):.2f}`
+• *Put 手續費*: `-${opportunity.get('putFee', 0):.2f}`
+• *Perp 手續費*: `-${opportunity.get('perpOpenFee', 0) + opportunity.get('perpCloseFee', 0):.2f}` (進+平倉)
+• *手續費合計*: `-${opportunity['totalFees']:.2f}`
 • *預估資金費率*: `{funding_text}` (基於當前費率 {opportunity['fundingRate24h']:.4f}% 估算24H)
 • *所需保證金 (估算)*: `${opportunity['margin']:.0f}`
 
@@ -99,24 +102,20 @@ def send_trade_execution_notification(opportunity: Dict) -> bool:
     put_fill  = opportunity.get('fill_put_price')  or opportunity.get('putPrice',  0.0)
     amount    = Config.TRADE_AMOUNT_BTC
 
-    # ── 以實際成交價計算各腿進場手續費（含 12.5% premium cap）────────────
-    call_notional  = call_fill * perp_fill * amount
-    put_notional   = put_fill  * perp_fill * amount
-    call_entry_fee = min(call_notional * OPTION_TAKER_FEE_RATE, call_notional * 0.125)
-    put_entry_fee  = min(put_notional  * OPTION_TAKER_FEE_RATE, put_notional  * 0.125)
-    perp_entry_fee = perp_fill * amount * PERP_TAKER_FEE_RATE
+    # ── 從 fill-based calculate_strategy 結果取得各腿手續費 ──────────────
+    call_entry_fee = opportunity.get('callFee', 0.0)
+    put_entry_fee  = opportunity.get('putFee',  0.0)
+    perp_entry_fee = opportunity.get('perpOpenFee', 0.0)
+    perp_close_fee = opportunity.get('perpCloseFee', 0.0)
     entry_fees     = call_entry_fee + put_entry_fee + perp_entry_fee
 
-    # ── 從 fill-based 重算結果取得財務合計 ──────────────────────────────
-    # trading_engine 成交後已以實際成交價重跑 calculate_strategy
-    # total_fees = 進場費 + 估算平倉費（均為 taker rate × notional）
     gross_profit = opportunity.get('grossProfit', 0.0)
     total_fees   = opportunity.get('totalFees',   0.0)
     funding_cost = opportunity.get('fundingCost', 0.0)   # 永遠正值
     funding_dir  = opportunity.get('fundingDirection', '')
     net_profit   = opportunity.get('netProfit',   0.0)
     margin       = opportunity.get('margin',      0.0)
-    exit_fee_est = total_fees - entry_fees                # 估算平倉費
+    exit_fee_est = perp_close_fee                         # 估算平倉費
 
     # ── 換算 ─────────────────────────────────────────────────────────────
     call_usd = call_fill * perp_fill
@@ -145,16 +144,21 @@ def send_trade_execution_notification(opportunity: Dict) -> bool:
 
 --- *成交明細* ---
 • *{call_action} Call* `{opportunity['callInstrument']}`
-  成交價: `{call_fill:.4f} BTC` ≈ `${call_usd:.0f}` | 進場費: `${call_entry_fee:.2f}`
+  成交價: `{call_fill:.4f} BTC` ≈ `${call_usd:.0f}` | 手續費: `-${call_entry_fee:.2f}`
 • *{put_action} Put* `{opportunity['putInstrument']}`
-  成交價: `{put_fill:.4f} BTC` ≈ `${put_usd:.0f}` | 進場費: `${put_entry_fee:.2f}`
+  成交價: `{put_fill:.4f} BTC` ≈ `${put_usd:.0f}` | 手續費: `-${put_entry_fee:.2f}`
 • *{perp_action} Perp* `BTC-PERPETUAL`
-  成交價: `${perp_fill:,.0f}` | 進場費: `${perp_entry_fee:.2f}`
+  成交價: `${perp_fill:,.0f}` | 進場費: `-${perp_entry_fee:.2f}`
 
---- *財務摘要（以成交價計算）* ---
+--- *手續費明細（以成交價計算）* ---
+• *Call 手續費*: `-${call_entry_fee:.2f}`
+• *Put 手續費*: `-${put_entry_fee:.2f}`
+• *Perp 進場費*: `-${perp_entry_fee:.2f}`
+• *Perp 平倉費 (估)*: `-${exit_fee_est:.2f}` (Taker 估算)
+• *手續費合計*: `-${total_fees:.2f}`
+
+--- *財務摘要* ---
 • *毛利*: `${gross_profit:+.2f}`
-• *進場手續費*: `-${entry_fees:.2f}`
-• *平倉手續費 (估)*: `-${abs(exit_fee_est):.2f}` (Taker 估算)
 • *資金費率 (估)*: {funding_label}
 • *預估淨利*: {net_icon} `${net_profit:+.2f}`
 • *保證金使用 (估算)*: `${margin:.0f}`
@@ -254,21 +258,22 @@ def send_position_closed_notification(position: Dict, close_method: str) -> bool
             amount           = amount,
         )
 
-        # calculate_strategy 預設 perp 進出場都 taker，maker 平倉時需扣除
-        # 原本的 close taker 費，改加 maker 費率（負值 = 回扣）。
+        # 從 calculate_strategy 取得各腿手續費
+        call_fee       = result['callFee']
+        put_fee        = result['putFee']
+        perp_open_fee  = result['perpOpenFee']
+        perp_close_fee_taker = result['perpCloseFee']
+
+        # calculate_strategy 預設 perp 進出場都 taker，maker 平倉時需調整
         perp_close_notional = close_perp * amount
-        close_fee_taker     = perp_close_notional * PERP_TAKER_FEE_RATE
         if close_method == 'maker':
-            close_fee = perp_close_notional * PERP_MAKER_FEE_RATE  # 負 = 回扣
-            total_fees_adjusted = result['totalFees'] - close_fee_taker + close_fee
+            perp_close_fee_actual = perp_close_notional * PERP_MAKER_FEE_RATE  # 負 = 回扣
+            total_fees_adjusted = result['totalFees'] - perp_close_fee_taker + perp_close_fee_actual
         else:
-            close_fee = close_fee_taker
+            perp_close_fee_actual = perp_close_fee_taker
             total_fees_adjusted = result['totalFees']
 
-        # 進場費 = 總費 - 平倉費（便於顯示拆解）
-        entry_fees = total_fees_adjusted - close_fee
-
-        # 毛利 / funding 直接用 calculate_strategy 的結果（方向自動依 strategy_type 處理）
+        # 毛利 / funding 直接用 calculate_strategy 的結果
         actual_gross     = result['grossProfit']
         funding_cost_abs = result['fundingCost']
         funding_dir      = result['fundingDirection']
@@ -288,9 +293,9 @@ def send_position_closed_notification(position: Dict, close_method: str) -> bool
         perp_icon = '🟢' if perp_pnl >= 0 else '🔴'
 
         if close_method == 'maker':
-            close_fee_str = f'`+${abs(close_fee):.2f}` (Maker 回扣)'
+            close_fee_str = f'`+${abs(perp_close_fee_actual):.2f}` (Maker 回扣)'
         else:
-            close_fee_str = f'`-${close_fee:.2f}` (Taker 市價)'
+            close_fee_str = f'`-${perp_close_fee_actual:.2f}` (Taker 市價)'
 
         pnl_block = f"""
 --- *平倉明細* ---
@@ -298,15 +303,17 @@ def send_position_closed_notification(position: Dict, close_method: str) -> bool
 • Perp 損益: {perp_icon} `${'%+.2f' % perp_pnl}`
 • 期權: 持有至到期，由 Deribit 以 index price 結算
 
---- *手續費（實際）* ---
-• 進場手續費: `-${entry_fees:.2f}`
-• 平倉手續費: {close_fee_str}
-• 合計: `-${total_fees_adjusted:.2f}`
+--- *手續費明細（實際）* ---
+• *Call 手續費*: `-${call_fee:.2f}`
+• *Put 手續費*: `-${put_fee:.2f}`
+• *Perp 進場費*: `-${perp_open_fee:.2f}`
+• *Perp 平倉費*: {close_fee_str}
+• *手續費合計*: `-${total_fees_adjusted:.2f}`
 
---- *損益* ---
+--- *最終損益* ---
 • 毛利: `${'%+.2f' % actual_gross}`
 • 資金費率: `{funding_sign_str}${funding_cost_abs:.2f}` ({funding_dir})
-• 淨損益: {net_icon} `${'%+.2f' % actual_net}`"""
+• *淨損益*: {net_icon} `${'%+.2f' % actual_net}`"""
     else:
         # expired 或資料不足，退回進場時預估值
         net_profit = position.get('net_profit_est', 0.0)

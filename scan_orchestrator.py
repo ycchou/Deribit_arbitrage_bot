@@ -76,7 +76,10 @@ def send_telegram_notification_with_reason(opportunity: Dict, block_reason_label
 --- *財務分析* ---
 • *預估淨利潤*: `${opportunity['netProfit']:.2f}`
 • *理論利潤*: `${opportunity['grossProfit']:.2f}`
-• *估計總手續費*: `${opportunity['totalFees']:.2f}`
+• *Call 手續費*: `-${opportunity.get('callFee', 0):.2f}`
+• *Put 手續費*: `-${opportunity.get('putFee', 0):.2f}`
+• *Perp 手續費*: `-${opportunity.get('perpOpenFee', 0) + opportunity.get('perpCloseFee', 0):.2f}` (進+平倉)
+• *手續費合計*: `-${opportunity['totalFees']:.2f}`
 • *預估資金費率*: `{funding_text}`
 • *所需保證金 (估算)*: `${opportunity['margin']:.0f}`
 
