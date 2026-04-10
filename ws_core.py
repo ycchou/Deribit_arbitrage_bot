@@ -140,23 +140,32 @@ class DeribitWebSocket(WsRpcMixin, WsSubscriptionMixin, WsMessageHandlerMixin):
     def _run_event_loop(self) -> None:
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+        _backoff = Config.WS_RECONNECT_DELAY   # 初始 5s
         while self.is_running:
+            _connected_ok = False
             try:
                 self.loop.run_until_complete(self._connect_and_run())
+                _connected_ok = True   # 正常返回 = 曾成功連線（不是 502 等建立失敗）
             except Exception as e:
                 logger.error(f'❌ WebSocket 事件循環錯誤: {e}')
             # 斷線後重連
             self.connection_ready.clear()
-            if self.is_running:
-                self._reconnect_count += 1
-                downtime = ''
-                if self._disconnect_time > 0:
-                    downtime = f'（斷線時長: {time.time() - self._disconnect_time:.1f}s）'
-                logger.info(
-                    f'⏳ {Config.WS_RECONNECT_DELAY}s 後重連... '
-                    f'(第 {self._reconnect_count} 次重連{downtime})'
-                )
-                time.sleep(Config.WS_RECONNECT_DELAY)
+            if not self.is_running:
+                break
+            self._reconnect_count += 1
+            # 指數退避：連線建立失敗時翻倍（5→10→20→40→60s），成功後重置
+            if _connected_ok:
+                _backoff = Config.WS_RECONNECT_DELAY
+            else:
+                _backoff = min(_backoff * 2, 60)
+            downtime = ''
+            if self._disconnect_time > 0:
+                downtime = f'（斷線時長: {time.time() - self._disconnect_time:.1f}s）'
+            logger.info(
+                f'⏳ {_backoff:.0f}s 後重連... '
+                f'(第 {self._reconnect_count} 次重連{downtime})'
+            )
+            time.sleep(_backoff)
 
     async def _connect_and_run(self) -> None:
         # Fix #2: 重連前將已訂閱頻道移回 pending
