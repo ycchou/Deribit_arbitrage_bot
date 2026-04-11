@@ -1013,6 +1013,7 @@ function renderPosCard(pos) {
       </div>
       <div style="display:flex;gap:8px;font-size:11px;color:var(--muted);margin-bottom:4px">
         <span>數量 <span style="color:var(--yellow)">${pos.amount} BTC</span></span>
+        ${pos.margin_est ? `<span>保證金 <span style="color:var(--orange)">$${pos.margin_est.toFixed(1)}</span></span>` : ''}
         <span style="flex:1;text-align:right;font-size:10px">${expStr}</span>
       </div>
       ${fillSection}
