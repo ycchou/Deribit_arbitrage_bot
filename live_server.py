@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from bot_state import BotState
 from config import Config
-from notifications import send_verification_code
+from notifications import send_verification_code, send_power_notification, send_config_updated_notification
 
 logger = logging.getLogger(__name__)
 
@@ -113,12 +113,13 @@ async def verify_code(request: Request):
         new_state = not _bot_state.trading_enabled
         _bot_state.update_trading_enabled(new_state)
         result['trading_enabled'] = new_state
+        threading.Thread(target=send_power_notification, args=(new_state,), daemon=True).start()
 
     elif action == 'update_config':
         Config.update_config(params)
         result['config'] = Config.get_public_config()
-        # broadcast updated config to all connected dashboards
         _push_from_thread({'type': 'config_update', 'config': Config.get_public_config()})
+        threading.Thread(target=send_config_updated_notification, args=(params,), daemon=True).start()
 
     return JSONResponse({'ok': True, **result})
 

@@ -466,20 +466,20 @@
       <div class="card-title"><span class="dot-accent"></span>SCAN RANGE</div>
       <div class="kv2">
         <div class="kv-item">
-          <div class="kv-label">Strike 範圍</div>
-          <div class="kv-val" id="cfg-strike-range" data-cfg="strike_scan_range">—</div>
+          <div class="kv-label">Strike 掃描範圍</div>
+          <div class="kv-val" id="cfg-strike-range" data-cfg="strike_scan_range" data-fmt="strike">—</div>
         </div>
         <div class="kv-item">
-          <div class="kv-label">到期日（最短h）</div>
-          <div class="kv-val" id="cfg-expiry-min" data-cfg="expiry_min_hours">—</div>
+          <div class="kv-label">到期日最短</div>
+          <div class="kv-val" id="cfg-expiry-min" data-cfg="expiry_min_hours" data-fmt="h">—</div>
         </div>
         <div class="kv-item">
-          <div class="kv-label">到期日（最長h）</div>
-          <div class="kv-val" id="cfg-expiry-max" data-cfg="expiry_max_hours">—</div>
+          <div class="kv-label">到期日最長</div>
+          <div class="kv-val" id="cfg-expiry-max" data-cfg="expiry_max_hours" data-fmt="h">—</div>
         </div>
         <div class="kv-item">
           <div class="kv-label">掃描間隔</div>
-          <div class="kv-val" id="cfg-scan-interval" data-cfg="scan_interval">—</div>
+          <div class="kv-val" id="cfg-scan-interval" data-cfg="scan_interval" data-fmt="s">—</div>
         </div>
       </div>
     </div>
@@ -489,16 +489,16 @@
       <div class="card-title"><span class="dot-accent"></span>TRADE CONFIG</div>
       <div class="kv2">
         <div class="kv-item">
-          <div class="kv-label">單次交易量 (BTC)</div>
-          <div class="kv-val" id="cfg-trade-amount" data-cfg="trade_amount_btc" data-step="0.1">—</div>
+          <div class="kv-label">單次交易量</div>
+          <div class="kv-val" id="cfg-trade-amount" data-cfg="trade_amount_btc" data-fmt="btc" data-step="0.1">—</div>
         </div>
         <div class="kv-item">
-          <div class="kv-label">最低淨利門檻 ($)</div>
-          <div class="kv-val" id="cfg-min-profit" data-cfg="min_net_profit">—</div>
+          <div class="kv-label">最低淨利門檻</div>
+          <div class="kv-val" id="cfg-min-profit" data-cfg="min_net_profit" data-fmt="usd">—</div>
         </div>
         <div class="kv-item">
-          <div class="kv-label">成交等待 (s)</div>
-          <div class="kv-val" id="cfg-fill-timeout" data-cfg="entry_fill_timeout">—</div>
+          <div class="kv-label">成交等待</div>
+          <div class="kv-val" id="cfg-fill-timeout" data-cfg="entry_fill_timeout" data-fmt="s">—</div>
         </div>
       </div>
     </div>
@@ -509,15 +509,15 @@
       <div class="kv2">
         <div class="kv-item">
           <div class="kv-label">最大並行部位</div>
-          <div class="kv-val" id="cfg-max-positions" data-cfg="max_concurrent_positions">—</div>
+          <div class="kv-val" id="cfg-max-positions" data-cfg="max_concurrent_positions" data-fmt="count">—</div>
         </div>
         <div class="kv-item">
-          <div class="kv-label">交易冷卻 (s)</div>
-          <div class="kv-val" id="cfg-trade-cooldown" data-cfg="trade_cooldown">—</div>
+          <div class="kv-label">交易冷卻</div>
+          <div class="kv-val" id="cfg-trade-cooldown" data-cfg="trade_cooldown" data-fmt="s">—</div>
         </div>
         <div class="kv-item">
-          <div class="kv-label">失敗冷卻 (s)</div>
-          <div class="kv-val" id="cfg-failure-cooldown" data-cfg="failure_cooldown">—</div>
+          <div class="kv-label">失敗冷卻</div>
+          <div class="kv-val" id="cfg-failure-cooldown" data-cfg="failure_cooldown" data-fmt="s">—</div>
         </div>
       </div>
     </div>
@@ -527,12 +527,12 @@
       <div class="card-title"><span class="dot-accent"></span>POSITION MGMT</div>
       <div class="kv2">
         <div class="kv-item">
-          <div class="kv-label">Maker 平倉觸發 (s)</div>
-          <div class="kv-val" id="cfg-close-trigger" data-cfg="position_close_trigger">—</div>
+          <div class="kv-label">Maker 平倉觸發</div>
+          <div class="kv-val" id="cfg-close-trigger" data-cfg="position_close_trigger" data-fmt="s">—</div>
         </div>
         <div class="kv-item">
-          <div class="kv-label">Taker 強平 (s)</div>
-          <div class="kv-val" id="cfg-force-close" data-cfg="taker_force_close">—</div>
+          <div class="kv-label">Taker 強平</div>
+          <div class="kv-val" id="cfg-force-close" data-cfg="taker_force_close" data-fmt="s">—</div>
         </div>
         <div class="kv-item">
           <div class="kv-label">環境</div>
@@ -978,6 +978,17 @@ function renderFunding(rate) {
     ? 'Longs pay shorts' : 'Shorts pay longs';
 }
 
+function fmtCfgVal(val, fmt) {
+  switch (fmt) {
+    case 'h':      return val + 'h';
+    case 's':      return val + 's';
+    case 'btc':    return val + ' BTC';
+    case 'usd':    return '$' + val;
+    case 'strike': return '±' + val;
+    default:       return String(val);
+  }
+}
+
 function renderConfig(cfg) {
   if (!cfg) return;
   _cfgOriginal = {...cfg};
@@ -1003,8 +1014,7 @@ function renderConfig(cfg) {
       el.innerHTML = `<input class="cfg-input" type="number" step="${step}"
         value="${val}" data-cfg-key="${key}" onchange="onCfgChange()">`;
     } else {
-      // read-only display
-      el.textContent = val;
+      el.textContent = fmtCfgVal(val, el.dataset.fmt);
       el.style.color = '';
     }
   });
