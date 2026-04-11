@@ -81,3 +81,22 @@ class Config:
     # ── Live Server ─────────────────────────────────────────────────────────────
     SERVER_HOST = _secrets.get("server", {}).get("host", "127.0.0.1")
     SERVER_PORT = int(_secrets.get("server", {}).get("port", 8080))
+
+    @classmethod
+    def get_public_config(cls) -> dict:
+        """回傳可安全公開的設定參數（不含 API Key 等機密）。"""
+        return {
+            "strike_scan_range": cls.STRIKE_SCAN_RANGE,
+            "expiry_min_hours": cls.EXPIRY_MIN_HOURS,
+            "expiry_max_hours": cls.EXPIRY_MAX_HOURS,
+            "scan_interval": cls.SCAN_INTERVAL_SECONDS,
+            "trade_amount_btc": cls.TRADE_AMOUNT_BTC,
+            "min_net_profit": cls.MIN_NET_PROFIT_OPPORTUNITY,
+            "entry_fill_timeout": cls.ENTRY_FILL_TIMEOUT_SECONDS,
+            "max_concurrent_positions": cls.MAX_CONCURRENT_POSITIONS,
+            "trade_cooldown": cls.TRADE_COOLDOWN_SECONDS,
+            "failure_cooldown": cls.FAILURE_COOLDOWN_SECONDS,
+            "position_close_trigger": cls.POSITION_CLOSE_TRIGGER_SECONDS,
+            "taker_force_close": cls.TAKER_FORCE_CLOSE_SECONDS,
+            "use_testnet": cls.USE_TESTNET,
+        }

@@ -12,6 +12,8 @@ from datetime import datetime, timezone, timedelta
 from collections import deque
 from typing import Optional, Dict, List, Callable
 
+from config import Config
+
 _TZ_TAIPEI = timezone(timedelta(hours=8))
 
 def _tw_time() -> str:
@@ -183,6 +185,7 @@ class BotState:
                 'log_buffer': list(self.log_buffer),
                 'last_trade_time': self.last_trade_time,
                 'system': system,
+                'config': Config.get_public_config(),
             }
 
     # ── Internal ──────────────────────────────────────────────────────────────
