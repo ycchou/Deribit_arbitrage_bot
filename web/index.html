@@ -557,29 +557,50 @@
       <!-- Scanner Card -->
       <div class="card">
         <div class="card-title"><span class="dot-accent"></span>套利掃描器</div>
-        <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+
+        <!-- Status row -->
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
           <span class="pill pill-muted" id="scan-pill">
             <span class="pill-dot blink" id="scan-dot"></span>
             <span id="scan-status-text">等待中…</span>
           </span>
-          <span style="font-size:11px; color:var(--muted)" id="scan-time"></span>
+          <span style="font-size:11px; color:var(--muted); margin-left:auto" id="scan-time"></span>
         </div>
-        <div class="kv2">
-          <div class="kv-item">
-            <div class="kv-label">最佳履約價</div>
-            <div class="kv-val" id="scan-strike">—</div>
+
+        <!-- Monitor scope -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:12px; margin-bottom:10px;">
+          <div>
+            <div style="color:var(--muted);font-size:10px;margin-bottom:2px">監控到期日</div>
+            <div id="scan-expiries" style="color:var(--text);font-weight:600;font-size:11px">—</div>
           </div>
-          <div class="kv-item">
-            <div class="kv-label">預估最高利潤</div>
-            <div class="kv-val" id="scan-profit">—</div>
+          <div>
+            <div style="color:var(--muted);font-size:10px;margin-bottom:2px">監控合約數</div>
+            <div id="scan-contracts" style="color:var(--text);font-weight:600">—</div>
           </div>
-          <div class="kv-item" style="margin-top:4px">
-            <div class="kv-label">策略類型</div>
-            <div class="kv-val" id="scan-strategy">—</div>
+        </div>
+
+        <!-- Opportunity section (hidden when no opportunity) -->
+        <div id="scan-opp-section" style="display:none; border-top:1px solid var(--border); padding-top:10px; margin-top:2px;">
+          <div style="font-size:10px;color:var(--orange);font-weight:700;letter-spacing:.5px;margin-bottom:8px">
+            ⚡ 市場機會（尚未下單）
           </div>
-          <div class="kv-item" style="margin-top:4px">
-            <div class="kv-label">目標到期日</div>
-            <div class="kv-val" id="scan-expiry">—</div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+            <div>
+              <div style="color:var(--muted);font-size:10px;margin-bottom:2px">最佳履約價</div>
+              <div class="kv-val" id="scan-strike">—</div>
+            </div>
+            <div>
+              <div style="color:var(--muted);font-size:10px;margin-bottom:2px">預估淨利潤</div>
+              <div class="kv-val c-green" id="scan-profit">—</div>
+            </div>
+            <div>
+              <div style="color:var(--muted);font-size:10px;margin-bottom:2px">策略</div>
+              <div class="kv-val" id="scan-strategy" style="font-size:11px">—</div>
+            </div>
+            <div>
+              <div style="color:var(--muted);font-size:10px;margin-bottom:2px">到期日</div>
+              <div class="kv-val" id="scan-expiry" style="font-size:11px">—</div>
+            </div>
           </div>
         </div>
       </div>
@@ -1144,31 +1165,44 @@ function renderScan() {
   const s = S.scanInfo;
   if (!s || !Object.keys(s).length) return;
 
+  // ── Status pill ──────────────────────────────────────────────────────────
   const held = s.positions_held || 0;
-  const heldTag = held > 0 ? ` (持倉 ${held} 組)` : '';
+  const heldTag = held > 0 ? ` · 持倉 ${held} 組` : '';
   const pillMap = {
-    cooling_down:      ['pill pill-orange', '失敗冷卻中…',                   false],
-    opportunity_found: ['pill pill-green',  '發現機會！' + heldTag,           true],
-    scanning:          ['pill pill-yellow', '掃描中…' + heldTag,             true],
-    no_opportunity:    ['pill pill-green',  '掃描中，尚無機會' + heldTag,     true],
+    cooling_down:      ['pill pill-orange', '失敗冷卻中…',        false],
+    opportunity_found: ['pill pill-yellow', '發現市場機會' + heldTag, true],
+    scanning:          ['pill pill-green',  '掃描中' + heldTag,   true],
+    no_opportunity:    ['pill pill-green',  '掃描中' + heldTag,   true],
   };
   const [pillCls, pillTxt, blinking] = pillMap[s.status] || ['pill pill-muted', s.status || '等待中', false];
   $('scan-pill').className = pillCls;
   $('scan-status-text').textContent = pillTxt;
   $('scan-dot').className = 'pill-dot' + (blinking ? ' blink' : '');
 
-  $('scan-strike').textContent   = s.strike ? fmtPrice(s.strike) : '—';
-  const p = s.best_profit;
-  $('scan-profit').textContent   = p != null ? '$' + p.toFixed(2) : '—';
-  $('scan-profit').style.color   = p > 0 ? 'var(--green)' : p < 0 ? 'var(--red)' : 'var(--muted)';
-  $('scan-strategy').textContent = s.strategy_name || '—';
-  $('scan-expiry').textContent   = s.expiry_date || '—';
+  // ── Monitor scope ─────────────────────────────────────────────────────────
+  const expiries = s.expiry_dates || (s.expiry_date ? [s.expiry_date] : []);
+  $('scan-expiries').textContent = expiries.length
+    ? expiries.map(e => e.replace(/(\d{2})([A-Z]{3})(\d{2})/, '$1 $2')).join(' · ')
+    : '—';
+  $('scan-contracts').textContent = s.contracts_monitored != null
+    ? s.contracts_monitored + ' 個'
+    : '—';
 
+  // ── Opportunity section ───────────────────────────────────────────────────
+  const hasOpp = s.status === 'opportunity_found' && s.best_profit != null;
+  $('scan-opp-section').style.display = hasOpp ? '' : 'none';
+  if (hasOpp) {
+    $('scan-strike').textContent   = s.strike ? fmtPrice(s.strike) : '—';
+    $('scan-profit').textContent   = '$' + s.best_profit.toFixed(2);
+    $('scan-strategy').textContent = s.strategy_name || '—';
+    $('scan-expiry').textContent   = s.expiry_date || '—';
+  }
+
+  // ── Last scan time ────────────────────────────────────────────────────────
   const scanT = s.last_ws_scan_time || s.last_scan_time;
   if (scanT) {
     const d = new Date(scanT * 1000);
-    $('scan-time').textContent = '上次掃描：' +
-      d.toLocaleTimeString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' });
+    $('scan-time').textContent = d.toLocaleTimeString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' });
   } else {
     $('scan-time').textContent = '';
   }

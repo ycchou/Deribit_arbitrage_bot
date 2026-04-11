@@ -191,6 +191,7 @@ def run_scan(ws_client, trader, pos_manager, trigger: str = 'fallback') -> None:
             'positions_held':             n_positions,
             'position_count':             n_positions,
             'trade_cooldown_remaining_sec': round(_cooldown_remaining),
+            'contracts_monitored':        len(all_instruments_needed),
         }
 
         if not all_opportunities:
