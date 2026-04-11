@@ -925,10 +925,8 @@ function renderScan() {
   $('scan-expiry').textContent   = s.expiry_date || '—';
 
   if (s.last_scan_time) {
-    const d = new Date(s.last_scan_time * 1000);
     const elapsed = Math.round(Date.now() / 1000 - s.last_scan_time);
-    const timeStr = d.toLocaleTimeString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' });
-    $('scan-time').textContent = `上次掃描：${timeStr}（${elapsed}s 前）`;
+    $('scan-time').textContent = '上次掃描：' + fmtUptime(elapsed);
   } else {
     $('scan-time').textContent = '';
   }
