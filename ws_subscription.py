@@ -57,7 +57,11 @@ class WsSubscriptionMixin:
                         self.subscribed_instruments.update(new_instruments)
                 return result
             except Exception as e:
-                logger.error(f'❌ 訂閱失敗: {e}')
+                err_msg = str(e) or type(e).__name__
+                logger.error(f'❌ 訂閱失敗: {err_msg}，放入 pending 等待重試')
+                future.cancel()
+                with self._sub_lock:
+                    self.pending_subscriptions.update(channels)
                 return False
         else:
             with self._sub_lock:
