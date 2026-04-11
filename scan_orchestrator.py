@@ -178,7 +178,7 @@ def run_scan(ws_client, trader, pos_manager, trigger: str = 'fallback') -> None:
             if global_state.last_trade_time > 0 else 0
 
         # 保留上一次 ws 觸發掃描的時間
-        _prev_ws_time = (global_state.scan_info or {}).get('last_ws_scan_time')
+        _prev_ws_time = (bot_state.scan_info or {}).get('last_ws_scan_time')
         _last_ws_scan_time = _now if trigger == 'ws' else _prev_ws_time
 
         _common_scan_info = {
