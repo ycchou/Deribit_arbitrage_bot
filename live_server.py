@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from bot_state import BotState
 from config import Config
-from notifications import send_verification_code, send_power_notification, send_config_updated_notification
+from notifications import send_verification_code, send_power_notification
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,14 @@ async def verify_code(request: Request):
     result: Dict = {'action': action}
 
     if action == 'toggle_power' and _bot_state:
-        new_state = not _bot_state.trading_enabled
+        # 開機時若有帶參數，先套用並持久化（關機時忽略 params）
+        turning_on = not _bot_state.trading_enabled
+        if turning_on and params:
+            Config.update_config(params)
+            _push_from_thread({'type': 'config_update', 'config': Config.get_public_config()})
+            result['config'] = Config.get_public_config()
+
+        new_state = turning_on
         _bot_state.update_trading_enabled(new_state)
         result['trading_enabled'] = new_state
         threading.Thread(target=send_power_notification, args=(new_state,), daemon=True).start()
@@ -119,7 +126,6 @@ async def verify_code(request: Request):
         Config.update_config(params)
         result['config'] = Config.get_public_config()
         _push_from_thread({'type': 'config_update', 'config': Config.get_public_config()})
-        threading.Thread(target=send_config_updated_notification, args=(params,), daemon=True).start()
 
     return JSONResponse({'ok': True, **result})
 

@@ -330,22 +330,6 @@
     }
     .cfg-input:focus { border-color: var(--green); box-shadow: 0 0 4px rgba(14,203,129,.3); }
 
-    /* ── Save config button ── */
-    .save-config-bar {
-      display: flex; align-items: center; justify-content: flex-end;
-      gap: 10px; margin-top: 8px;
-    }
-    .save-config-bar.hidden { display: none; }
-    .save-config-btn {
-      padding: 6px 20px; border-radius: 6px; font-size: 12px; font-weight: 700;
-      background: var(--yellow); color: #000; border: none; cursor: pointer;
-      transition: opacity .15s;
-    }
-    .save-config-btn:hover { opacity: .85; }
-    .save-config-hint {
-      font-size: 11px; color: var(--orange);
-    }
-
     /* ── Responsive ── */
     @media (max-width: 1100px) {
       .g4 { grid-template-columns: repeat(2, 1fr); }
@@ -542,10 +526,7 @@
     </div>
 
   </div>
-  <div class="save-config-bar hidden" id="save-config-bar">
-    <span class="save-config-hint">有未儲存的變更</span>
-    <button class="save-config-btn" onclick="onSaveConfig()">儲存變更</button>
-  </div>
+  <div id="save-config-bar" style="display:none"></div><!-- placeholder removed -->
 
   <!-- ── Row 3: Scanner + Position  |  P&L Chart ── -->
   <div class="section-label">交易 Trading</div>
@@ -1024,35 +1005,16 @@ function renderConfig(cfg) {
   }
 }
 
-function onCfgChange() {
-  // check if any value differs from original
-  const inputs = document.querySelectorAll('.cfg-input');
-  let hasChange = false;
-  inputs.forEach(inp => {
-    const key = inp.dataset.cfgKey;
-    if (String(inp.value) !== String(_cfgOriginal[key])) hasChange = true;
-  });
-  const bar = $('save-config-bar');
-  if (hasChange) bar.classList.remove('hidden');
-  else bar.classList.add('hidden');
-}
+function onCfgChange() { /* no-op: params saved on power ON */ }
 
-function getChangedParams() {
+function getAllInputParams() {
   const params = {};
   document.querySelectorAll('.cfg-input').forEach(inp => {
     const key = inp.dataset.cfgKey;
     const val = parseFloat(inp.value);
-    if (!isNaN(val) && String(val) !== String(_cfgOriginal[key])) {
-      params[key] = val;
-    }
+    if (!isNaN(val)) params[key] = val;
   });
   return params;
-}
-
-function onSaveConfig() {
-  const params = getChangedParams();
-  if (!Object.keys(params).length) return;
-  requestCode('update_config', params);
 }
 
 // ── Power button ────────────────────────────────────────────────────────────
@@ -1071,7 +1033,9 @@ function renderPower() {
 }
 
 function onPowerClick() {
-  requestCode('toggle_power');
+  // 開機時帶入當前所有 input 值一起存；關機時不帶 params
+  const params = !S.tradingEnabled ? getAllInputParams() : {};
+  requestCode('toggle_power', params);
 }
 
 // ── Verification flow ───────────────────────────────────────────────────────

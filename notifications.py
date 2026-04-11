@@ -61,37 +61,24 @@ def send_verification_code(code: str, action_description: str) -> bool:
 
 
 def send_power_notification(enabled: bool) -> bool:
-    """發送開關機確認通知。"""
+    """發送開關機確認通知。開機時附上完整下單設定。"""
     timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
     if enabled:
-        msg = f"🟢 *機器人已開機*\n\n已開始執行下單，掃描到符合條件的機會將自動進場。\n\n_時間: {timestamp}_"
+        env = "🧪 Testnet" if Config.USE_TESTNET else "🔴 Mainnet"
+        msg = f"""🟢 *機器人已開機，開始下單*
+
+*下單設定*:
+• 環境: {env}
+• 交易單位: `{Config.TRADE_AMOUNT_BTC} BTC`
+• 最低淨利門檻: `${Config.MIN_NET_PROFIT_OPPORTUNITY}`
+• Strike 掃描範圍: `±{Config.STRIKE_SCAN_RANGE}`
+• 到期日範圍: `{Config.EXPIRY_MIN_HOURS}h ~ {Config.EXPIRY_MAX_HOURS}h`
+• 最大並行部位: `{Config.MAX_CONCURRENT_POSITIONS}`
+• 交易冷卻: `{Config.TRADE_COOLDOWN_SECONDS}s`
+
+_時間: {timestamp}_""".strip()
     else:
         msg = f"🔴 *機器人已關機*\n\n已停止下單，現有持倉繼續管理至到期，掃描持續運作。\n\n_時間: {timestamp}_"
-    return _send_message(msg)
-
-
-def send_config_updated_notification(params: dict) -> bool:
-    """發送策略參數修改確認通知。"""
-    timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
-    param_labels = {
-        'trade_amount_btc':         '單次交易量',
-        'min_net_profit':           '最低淨利門檻',
-        'strike_scan_range':        'Strike 掃描範圍',
-        'expiry_min_hours':         '到期日最短 (h)',
-        'expiry_max_hours':         '到期日最長 (h)',
-        'max_concurrent_positions': '最大並行部位',
-        'trade_cooldown':           '交易冷卻 (s)',
-        'failure_cooldown':         '失敗冷卻 (s)',
-        'entry_fill_timeout':       '成交等待 (s)',
-        'position_close_trigger':   'Maker 平倉觸發 (s)',
-        'taker_force_close':        'Taker 強平 (s)',
-        'scan_interval':            '掃描間隔 (s)',
-    }
-    lines = '\n'.join(
-        f"• {param_labels.get(k, k)}: `{v}`"
-        for k, v in params.items()
-    )
-    msg = f"⚙️ *策略參數已更新*\n\n{lines}\n\n_時間: {timestamp}_"
     return _send_message(msg)
 
 
@@ -217,18 +204,17 @@ def send_trade_execution_notification(opportunity: Dict) -> bool:
     return _send_message(message)
 
 def send_startup_notification() -> bool:
-    """發送機器人啟動通知"""
+    """發送機器人啟動通知（預設關機狀態，僅監控市場）"""
     env = "🧪 Testnet" if Config.USE_TESTNET else "🔴 Mainnet"
     timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
     message = f"""
 🤖 *Deribit 套利機器人已啟動*
 
 • *環境*: {env}
-• *交易單位*: `{Config.TRADE_AMOUNT_BTC} BTC`
-• *最低利潤門檻*: `${Config.MIN_NET_PROFIT_OPPORTUNITY}`
 • *啟動時間*: {timestamp}
 
-✅ WebSocket 已連接並認證，開始監控市場。
+⏸ *預設為關機狀態，掃描市場但不下單。*
+請至 Dashboard 按下開機鍵並通過驗證後開始交易。
 """.strip()
     logger.info("發送啟動通知")
     return _send_message(message)
