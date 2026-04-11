@@ -73,6 +73,9 @@ class BotState:
         self._cpu_history: deque = deque()  # (timestamp, pct)
         self._ram_history: deque = deque()
 
+        # ── Trading power state ─────────────────────────────────────────────
+        self.trading_enabled: bool = False   # 預設關機（不下單）
+
         # ── Broadcast callback (injected by live_server) ─────────────────────
         self._broadcast: Optional[Callable[[Dict], None]] = None
 
@@ -83,6 +86,11 @@ class BotState:
 
     def set_broadcast_callback(self, cb: Callable[[Dict], None]) -> None:
         self._broadcast = cb
+
+    def update_trading_enabled(self, enabled: bool) -> None:
+        with self._lock:
+            self.trading_enabled = enabled
+        self._push({'type': 'trading_enabled', 'value': enabled})
 
     # ── Update Methods ────────────────────────────────────────────────────────
 
@@ -185,6 +193,7 @@ class BotState:
                 'log_buffer': list(self.log_buffer),
                 'last_trade_time': self.last_trade_time,
                 'system': system,
+                'trading_enabled': self.trading_enabled,
                 'config': Config.get_public_config(),
             }
 

@@ -272,6 +272,80 @@
     /* ── Chart container ── */
     .chart-wrap { position: relative; height: 200px; }
 
+    /* ── Power button ── */
+    .power-btn {
+      width: 36px; height: 36px; border-radius: 50%;
+      border: 2px solid var(--red); background: rgba(246,70,93,.12);
+      color: var(--red); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; font-weight: 700;
+      transition: all .25s ease; flex-shrink: 0;
+    }
+    .power-btn:hover { transform: scale(1.1); }
+    .power-btn.on {
+      border-color: var(--green); background: rgba(14,203,129,.12);
+      color: var(--green); box-shadow: 0 0 12px rgba(14,203,129,.3);
+    }
+    .power-label {
+      font-size: 10px; font-weight: 700; letter-spacing: .5px;
+    }
+
+    /* ── Verify modal ── */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.65);
+      z-index: 1000; display: flex; align-items: center; justify-content: center;
+    }
+    .modal-overlay.hidden { display: none; }
+    .modal-card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 12px; padding: 28px 32px; width: 360px;
+      text-align: center;
+    }
+    .modal-title { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+    .modal-desc  { font-size: 12px; color: var(--muted); margin-bottom: 20px; }
+    .modal-input {
+      width: 100%; padding: 10px 14px; font-size: 22px; font-weight: 700;
+      letter-spacing: 8px; text-align: center;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--yellow); outline: none;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .modal-input:focus { border-color: var(--yellow); }
+    .modal-btns { display: flex; gap: 10px; margin-top: 18px; }
+    .modal-btns button {
+      flex: 1; padding: 10px; border-radius: 8px; font-size: 13px;
+      font-weight: 600; cursor: pointer; border: none; transition: opacity .15s;
+    }
+    .modal-btns button:hover { opacity: .85; }
+    .modal-btn-cancel { background: var(--bg3); color: var(--muted); }
+    .modal-btn-ok { background: var(--yellow); color: #000; }
+    .modal-error { font-size: 11px; color: var(--red); margin-top: 8px; min-height: 16px; }
+
+    /* ── Editable config inputs ── */
+    .cfg-input {
+      width: 80px; padding: 2px 6px; font-size: 13px; font-weight: 600;
+      background: var(--bg); border: 1px solid var(--yellow);
+      border-radius: 4px; color: var(--yellow); outline: none;
+      font-family: inherit;
+    }
+    .cfg-input:focus { border-color: var(--green); box-shadow: 0 0 4px rgba(14,203,129,.3); }
+
+    /* ── Save config button ── */
+    .save-config-bar {
+      display: flex; align-items: center; justify-content: flex-end;
+      gap: 10px; margin-top: 8px;
+    }
+    .save-config-bar.hidden { display: none; }
+    .save-config-btn {
+      padding: 6px 20px; border-radius: 6px; font-size: 12px; font-weight: 700;
+      background: var(--yellow); color: #000; border: none; cursor: pointer;
+      transition: opacity .15s;
+    }
+    .save-config-btn:hover { opacity: .85; }
+    .save-config-hint {
+      font-size: 11px; color: var(--orange);
+    }
+
     /* ── Responsive ── */
     @media (max-width: 1100px) {
       .g4 { grid-template-columns: repeat(2, 1fr); }
@@ -305,6 +379,10 @@
   <div class="header-right">
     <span id="conn-label" style="color:var(--red)">連線中…</span>
     <span class="header-clock" id="clock">--:--:--</span>
+    <div style="display:flex;align-items:center;gap:6px;margin-left:8px">
+      <button class="power-btn" id="power-btn" onclick="onPowerClick()" title="開關機">&#x23FB;</button>
+      <span class="power-label c-red" id="power-label">OFF</span>
+    </div>
   </div>
 </div>
 
@@ -381,7 +459,7 @@
 
   <!-- ── Row 2.5: Strategy Config ── -->
   <div class="section-label">策略設定 Strategy Config</div>
-  <div class="g4">
+  <div class="g4" id="cfg-grid">
 
     <!-- 1 - Scan Range -->
     <div class="card">
@@ -389,15 +467,19 @@
       <div class="kv2">
         <div class="kv-item">
           <div class="kv-label">Strike 範圍</div>
-          <div class="kv-val" id="cfg-strike-range">—</div>
+          <div class="kv-val" id="cfg-strike-range" data-cfg="strike_scan_range">—</div>
         </div>
         <div class="kv-item">
-          <div class="kv-label">到期日窗口</div>
-          <div class="kv-val" id="cfg-expiry-window">—</div>
+          <div class="kv-label">到期日（最短h）</div>
+          <div class="kv-val" id="cfg-expiry-min" data-cfg="expiry_min_hours">—</div>
+        </div>
+        <div class="kv-item">
+          <div class="kv-label">到期日（最長h）</div>
+          <div class="kv-val" id="cfg-expiry-max" data-cfg="expiry_max_hours">—</div>
         </div>
         <div class="kv-item">
           <div class="kv-label">掃描間隔</div>
-          <div class="kv-val" id="cfg-scan-interval">—</div>
+          <div class="kv-val" id="cfg-scan-interval" data-cfg="scan_interval">—</div>
         </div>
       </div>
     </div>
@@ -407,16 +489,16 @@
       <div class="card-title"><span class="dot-accent"></span>TRADE CONFIG</div>
       <div class="kv2">
         <div class="kv-item">
-          <div class="kv-label">單次交易量</div>
-          <div class="kv-val" id="cfg-trade-amount">—</div>
+          <div class="kv-label">單次交易量 (BTC)</div>
+          <div class="kv-val" id="cfg-trade-amount" data-cfg="trade_amount_btc" data-step="0.1">—</div>
         </div>
         <div class="kv-item">
-          <div class="kv-label">最低淨利門檻</div>
-          <div class="kv-val" id="cfg-min-profit">—</div>
+          <div class="kv-label">最低淨利門檻 ($)</div>
+          <div class="kv-val" id="cfg-min-profit" data-cfg="min_net_profit">—</div>
         </div>
         <div class="kv-item">
-          <div class="kv-label">成交等待</div>
-          <div class="kv-val" id="cfg-fill-timeout">—</div>
+          <div class="kv-label">成交等待 (s)</div>
+          <div class="kv-val" id="cfg-fill-timeout" data-cfg="entry_fill_timeout">—</div>
         </div>
       </div>
     </div>
@@ -427,15 +509,15 @@
       <div class="kv2">
         <div class="kv-item">
           <div class="kv-label">最大並行部位</div>
-          <div class="kv-val" id="cfg-max-positions">—</div>
+          <div class="kv-val" id="cfg-max-positions" data-cfg="max_concurrent_positions">—</div>
         </div>
         <div class="kv-item">
-          <div class="kv-label">交易冷卻</div>
-          <div class="kv-val" id="cfg-trade-cooldown">—</div>
+          <div class="kv-label">交易冷卻 (s)</div>
+          <div class="kv-val" id="cfg-trade-cooldown" data-cfg="trade_cooldown">—</div>
         </div>
         <div class="kv-item">
-          <div class="kv-label">失敗冷卻</div>
-          <div class="kv-val" id="cfg-failure-cooldown">—</div>
+          <div class="kv-label">失敗冷卻 (s)</div>
+          <div class="kv-val" id="cfg-failure-cooldown" data-cfg="failure_cooldown">—</div>
         </div>
       </div>
     </div>
@@ -445,12 +527,12 @@
       <div class="card-title"><span class="dot-accent"></span>POSITION MGMT</div>
       <div class="kv2">
         <div class="kv-item">
-          <div class="kv-label">Maker 平倉觸發</div>
-          <div class="kv-val" id="cfg-close-trigger">—</div>
+          <div class="kv-label">Maker 平倉觸發 (s)</div>
+          <div class="kv-val" id="cfg-close-trigger" data-cfg="position_close_trigger">—</div>
         </div>
         <div class="kv-item">
-          <div class="kv-label">Taker 強平</div>
-          <div class="kv-val" id="cfg-force-close">—</div>
+          <div class="kv-label">Taker 強平 (s)</div>
+          <div class="kv-val" id="cfg-force-close" data-cfg="taker_force_close">—</div>
         </div>
         <div class="kv-item">
           <div class="kv-label">環境</div>
@@ -459,6 +541,10 @@
       </div>
     </div>
 
+  </div>
+  <div class="save-config-bar hidden" id="save-config-bar">
+    <span class="save-config-hint">有未儲存的變更</span>
+    <button class="save-config-btn" onclick="onSaveConfig()">儲存變更</button>
   </div>
 
   <!-- ── Row 3: Scanner + Position  |  P&L Chart ── -->
@@ -608,6 +694,22 @@
 
 </div><!-- /page -->
 
+<!-- ── Verification Modal ── -->
+<div class="modal-overlay hidden" id="verify-modal">
+  <div class="modal-card">
+    <div class="modal-title" id="modal-title">輸入驗證碼</div>
+    <div class="modal-desc" id="modal-desc">6 位數驗證碼已發送到 Telegram</div>
+    <input class="modal-input" id="modal-code" type="text" maxlength="6"
+           placeholder="000000" inputmode="numeric" pattern="[0-9]*"
+           onkeydown="if(event.key==='Enter')onVerifySubmit()">
+    <div class="modal-error" id="modal-error"></div>
+    <div class="modal-btns">
+      <button class="modal-btn-cancel" onclick="closeModal()">取消</button>
+      <button class="modal-btn-ok" onclick="onVerifySubmit()">確認</button>
+    </div>
+  </div>
+</div>
+
 <script>
 'use strict';
 
@@ -621,7 +723,12 @@ const S = {
   system: {},
   priceHistory: [],   // { t, v } last 80 BTC prices for sparkline
   lastDataAt: 0,      // 前端收到任何 Server 資料的時間（ms）
+  tradingEnabled: false,
 };
+
+// ── Config edit state ──────────────────────────────────────────────────────────
+let _cfgOriginal = {};   // snapshot from server
+let _cfgEditing  = false;
 
 // ── Log state ─────────────────────────────────────────────────────────────────
 let logFilter = 'ALL';
@@ -852,24 +959,157 @@ function renderFunding(rate) {
 
 function renderConfig(cfg) {
   if (!cfg) return;
-  $('cfg-strike-range').textContent = '±' + cfg.strike_scan_range;
-  $('cfg-expiry-window').textContent = cfg.expiry_min_hours + '–' + cfg.expiry_max_hours + 'h';
-  $('cfg-scan-interval').textContent = cfg.scan_interval + 's';
-  $('cfg-trade-amount').textContent = cfg.trade_amount_btc + ' BTC';
-  const profitEl = $('cfg-min-profit');
-  profitEl.textContent = '$' + cfg.min_net_profit;
-  profitEl.style.color = 'var(--yellow)';
-  $('cfg-fill-timeout').textContent = cfg.entry_fill_timeout + 's';
-  $('cfg-max-positions').textContent = cfg.max_concurrent_positions;
-  $('cfg-trade-cooldown').textContent = cfg.trade_cooldown + 's';
-  $('cfg-failure-cooldown').textContent = cfg.failure_cooldown + 's';
-  $('cfg-close-trigger').textContent = cfg.position_close_trigger + 's';
-  $('cfg-force-close').textContent = cfg.taker_force_close + 's';
+  _cfgOriginal = {...cfg};
+
+  // env badge (always read-only)
   const envEl = $('cfg-env');
   if (cfg.use_testnet) {
     envEl.innerHTML = '<span class="pill pill-orange" style="font-size:11px;padding:2px 8px;">TESTNET</span>';
   } else {
     envEl.innerHTML = '<span class="pill pill-green" style="font-size:11px;padding:2px 8px;">LIVE</span>';
+  }
+
+  // editable fields
+  const canEdit = !S.tradingEnabled;
+  const fields = document.querySelectorAll('[data-cfg]');
+  fields.forEach(el => {
+    const key = el.dataset.cfg;
+    const val = cfg[key];
+    if (val == null) return;
+
+    if (canEdit) {
+      const step = el.dataset.step || '1';
+      el.innerHTML = `<input class="cfg-input" type="number" step="${step}"
+        value="${val}" data-cfg-key="${key}" onchange="onCfgChange()">`;
+    } else {
+      // read-only display
+      el.textContent = val;
+      el.style.color = '';
+    }
+  });
+
+  if (!canEdit) {
+    $('save-config-bar').classList.add('hidden');
+  }
+}
+
+function onCfgChange() {
+  // check if any value differs from original
+  const inputs = document.querySelectorAll('.cfg-input');
+  let hasChange = false;
+  inputs.forEach(inp => {
+    const key = inp.dataset.cfgKey;
+    if (String(inp.value) !== String(_cfgOriginal[key])) hasChange = true;
+  });
+  const bar = $('save-config-bar');
+  if (hasChange) bar.classList.remove('hidden');
+  else bar.classList.add('hidden');
+}
+
+function getChangedParams() {
+  const params = {};
+  document.querySelectorAll('.cfg-input').forEach(inp => {
+    const key = inp.dataset.cfgKey;
+    const val = parseFloat(inp.value);
+    if (!isNaN(val) && String(val) !== String(_cfgOriginal[key])) {
+      params[key] = val;
+    }
+  });
+  return params;
+}
+
+function onSaveConfig() {
+  const params = getChangedParams();
+  if (!Object.keys(params).length) return;
+  requestCode('update_config', params);
+}
+
+// ── Power button ────────────────────────────────────────────────────────────
+function renderPower() {
+  const btn   = $('power-btn');
+  const label = $('power-label');
+  if (S.tradingEnabled) {
+    btn.classList.add('on');
+    label.textContent = 'ON';
+    label.className = 'power-label c-green';
+  } else {
+    btn.classList.remove('on');
+    label.textContent = 'OFF';
+    label.className = 'power-label c-red';
+  }
+}
+
+function onPowerClick() {
+  requestCode('toggle_power');
+}
+
+// ── Verification flow ───────────────────────────────────────────────────────
+async function requestCode(action, params = {}) {
+  $('modal-error').textContent = '';
+  try {
+    const resp = await fetch('/api/request-code', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action, params})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      showVerifyModal(action);
+    } else {
+      alert(data.message || '發送驗證碼失敗');
+    }
+  } catch (e) {
+    alert('網路錯誤: ' + e.message);
+  }
+}
+
+function showVerifyModal(action) {
+  const titleMap = {
+    toggle_power: S.tradingEnabled ? '確認關機' : '確認開機',
+    update_config: '確認修改策略參數',
+  };
+  $('modal-title').textContent = titleMap[action] || '驗證操作';
+  $('modal-desc').textContent = '6 位數驗證碼已發送到 Telegram';
+  $('modal-code').value = '';
+  $('modal-error').textContent = '';
+  $('verify-modal').classList.remove('hidden');
+  setTimeout(() => $('modal-code').focus(), 50);
+}
+
+function closeModal() {
+  $('verify-modal').classList.add('hidden');
+}
+
+async function onVerifySubmit() {
+  const code = $('modal-code').value.trim();
+  if (code.length !== 6 || !/^\d{6}$/.test(code)) {
+    $('modal-error').textContent = '請輸入 6 位數字驗證碼';
+    return;
+  }
+  try {
+    const resp = await fetch('/api/verify-code', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({code})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      closeModal();
+      // config_update and trading_enabled will arrive via WS broadcast
+      // but also handle inline response for immediate feedback
+      if (data.trading_enabled != null) {
+        S.tradingEnabled = data.trading_enabled;
+        renderPower();
+        renderConfig(_cfgOriginal);  // re-render edit/readonly
+      }
+      if (data.config) {
+        renderConfig(data.config);
+      }
+    } else {
+      $('modal-error').textContent = data.message || '驗證失敗';
+    }
+  } catch (e) {
+    $('modal-error').textContent = '網路錯誤: ' + e.message;
   }
 }
 
@@ -1213,6 +1453,7 @@ function handle(msg) {
       S.activePos      = S.activePositions[0] || null;
       S.trades         = msg.trade_history || [];
       S.system         = msg.system || {};
+      S.tradingEnabled = !!msg.trading_enabled;
 
       renderBtc(S.btcPrice);
       renderFunding(S.fundingRate);
@@ -1220,6 +1461,7 @@ function handle(msg) {
       renderScan();
       renderPos();
       renderSystem();
+      renderPower();
       renderConfig(msg.config);
       renderKpis();
       renderNextTrade();
@@ -1276,6 +1518,16 @@ function handle(msg) {
       renderNextTrade();
       renderTrades();
       rebuildPnlChart();
+      break;
+
+    case 'trading_enabled':
+      S.tradingEnabled = !!msg.value;
+      renderPower();
+      renderConfig(_cfgOriginal);  // toggle edit/readonly
+      break;
+
+    case 'config_update':
+      renderConfig(msg.config);
       break;
 
     case 'log':

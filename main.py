@@ -30,6 +30,7 @@ def main() -> None:
     log_handler.setLevel(logging.INFO)
     setup_logging(extra_handlers=[log_handler])
 
+    Config.load_runtime_overrides()
     logger.info('🤖 Deribit 套利機器人啟動')
 
     # 啟動 live dashboard

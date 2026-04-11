@@ -46,6 +46,7 @@ def _notify_opportunity(best: Dict, block_reason: Optional[str]) -> None:
     reason_label = {
         'position_limit': f'⛔ 已達 {Config.MAX_CONCURRENT_POSITIONS} 組部位上限，僅供參考',
         'cooldown':       f'⏳ 冷卻中（剩餘 {max(0, Config.TRADE_COOLDOWN_SECONDS - (now - global_state.last_trade_time)):.0f}s），僅供參考',
+        'paused':         '⏸ 機器人已關機（暫停下單），僅供參考',
     }.get(block_reason, f'⚠️ {block_reason}，僅供參考')
 
     send_telegram_notification_with_reason(best, reason_label)
@@ -219,6 +220,10 @@ def run_scan(ws_client, trader, pos_manager, trigger: str = 'fallback') -> None:
             can_trade    = False
             block_reason = 'position_limit'
             logger.debug(f"📊 已達 {Config.MAX_CONCURRENT_POSITIONS} 組部位上限，暫停進場")
+
+        if can_trade and not bot_state.trading_enabled:
+            can_trade = False
+            block_reason = 'paused'
 
         if can_trade:
             cooldown_elapsed = time.time() - global_state.last_trade_time

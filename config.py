@@ -5,9 +5,11 @@
 機密資料（API Key 等）從同目錄的 secrets.yaml 讀取。
 """
 
+import json
 import os
 import yaml
 from pathlib import Path
+from typing import Any, Dict
 
 
 def _load_secrets() -> dict:
@@ -81,6 +83,49 @@ class Config:
     # ── Live Server ─────────────────────────────────────────────────────────────
     SERVER_HOST = _secrets.get("server", {}).get("host", "127.0.0.1")
     SERVER_PORT = int(_secrets.get("server", {}).get("port", 8080))
+
+    # ── Runtime config persistence ────────────────────────────────────────────
+    RUNTIME_CONFIG_PATH = Path(__file__).parent / 'runtime_config.json'
+
+    # 可由 Dashboard 修改的參數白名單：key → (Config attr name, type cast)
+    _ALLOWED_PARAMS: Dict[str, tuple] = {
+        'trade_amount_btc':        ('TRADE_AMOUNT_BTC',              float),
+        'min_net_profit':          ('MIN_NET_PROFIT_OPPORTUNITY',    float),
+        'strike_scan_range':       ('STRIKE_SCAN_RANGE',            int),
+        'expiry_min_hours':        ('EXPIRY_MIN_HOURS',             int),
+        'expiry_max_hours':        ('EXPIRY_MAX_HOURS',             int),
+        'max_concurrent_positions':('MAX_CONCURRENT_POSITIONS',     int),
+        'trade_cooldown':          ('TRADE_COOLDOWN_SECONDS',       int),
+        'failure_cooldown':        ('FAILURE_COOLDOWN_SECONDS',     int),
+        'entry_fill_timeout':      ('ENTRY_FILL_TIMEOUT_SECONDS',   int),
+        'position_close_trigger':  ('POSITION_CLOSE_TRIGGER_SECONDS', int),
+        'taker_force_close':       ('TAKER_FORCE_CLOSE_SECONDS',    int),
+        'scan_interval':           ('SCAN_INTERVAL_SECONDS',        int),
+    }
+
+    @classmethod
+    def update_config(cls, params: Dict[str, Any], persist: bool = True) -> None:
+        """更新記憶體中的 Config 值，可選持久化到 runtime_config.json。"""
+        for key, val in params.items():
+            if key in cls._ALLOWED_PARAMS:
+                attr, expected_type = cls._ALLOWED_PARAMS[key]
+                setattr(cls, attr, expected_type(val))
+
+        if persist:
+            existing: dict = {}
+            if cls.RUNTIME_CONFIG_PATH.exists():
+                existing = json.loads(cls.RUNTIME_CONFIG_PATH.read_text(encoding='utf-8'))
+            existing.update(params)
+            cls.RUNTIME_CONFIG_PATH.write_text(
+                json.dumps(existing, indent=2, ensure_ascii=False), encoding='utf-8'
+            )
+
+    @classmethod
+    def load_runtime_overrides(cls) -> None:
+        """啟動時載入 runtime_config.json 覆蓋預設值（不重寫檔案）。"""
+        if cls.RUNTIME_CONFIG_PATH.exists():
+            overrides = json.loads(cls.RUNTIME_CONFIG_PATH.read_text(encoding='utf-8'))
+            cls.update_config(overrides, persist=False)
 
     @classmethod
     def get_public_config(cls) -> dict:

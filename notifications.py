@@ -49,6 +49,17 @@ def _send_message(message: str) -> bool:
         logger.error(f'❌ 發送 Telegram 訊息時發生未知錯誤: {e}')
         return False
 
+def send_verification_code(code: str, action_description: str) -> bool:
+    """發送 Dashboard 操作驗證碼到 Telegram。"""
+    msg = (
+        f"🔐 *Dashboard 操作驗證*\n\n"
+        f"驗證碼: `{code}`\n"
+        f"操作: {action_description}\n\n"
+        f"⏰ 5 分鐘內有效"
+    )
+    return _send_message(msg)
+
+
 def send_telegram_notification(opportunity: Dict) -> bool:
     """格式化套利機會訊息並透過 Telegram Bot 發送（用於一般監控）"""
     timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
