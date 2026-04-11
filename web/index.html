@@ -924,9 +924,11 @@ function renderScan() {
   $('scan-strategy').textContent = s.strategy_name || '—';
   $('scan-expiry').textContent   = s.expiry_date || '—';
 
-  if (s.last_scan_time) {
-    const elapsed = Math.round(Date.now() / 1000 - s.last_scan_time);
-    $('scan-time').textContent = '上次掃描：' + fmtUptime(elapsed);
+  const scanT = s.last_ws_scan_time || s.last_scan_time;
+  if (scanT) {
+    const d = new Date(scanT * 1000);
+    $('scan-time').textContent = '上次掃描：' +
+      d.toLocaleTimeString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' });
   } else {
     $('scan-time').textContent = '';
   }
@@ -1295,7 +1297,7 @@ setInterval(() => {
   }
   if (S.activePositions.length) renderPos();
   renderNextTrade();
-  if (S.scanInfo && S.scanInfo.last_scan_time) renderScan();
+  if (S.scanInfo && (S.scanInfo.last_ws_scan_time || S.scanInfo.last_scan_time)) renderScan();
 }, 1000);
 
 // ── Refresh system metrics every 30s ──────────────────────────────────────────

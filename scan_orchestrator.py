@@ -91,7 +91,7 @@ _資料時間: {timestamp}_
     return _send_message(message)
 
 
-def run_scan(ws_client, trader, pos_manager) -> None:
+def run_scan(ws_client, trader, pos_manager, trigger: str = 'fallback') -> None:
     """
     單次掃描邏輯。
     由事件 callback（on_ticker）或兜底 loop 呼叫。
@@ -177,8 +177,14 @@ def run_scan(ws_client, trader, pos_manager) -> None:
         _cooldown_remaining = max(0, Config.TRADE_COOLDOWN_SECONDS - (_now - global_state.last_trade_time)) \
             if global_state.last_trade_time > 0 else 0
 
+        # 保留上一次 ws 觸發掃描的時間
+        _prev_ws_time = (global_state.scan_info or {}).get('last_ws_scan_time')
+        _last_ws_scan_time = _now if trigger == 'ws' else _prev_ws_time
+
         _common_scan_info = {
             'last_scan_time':             _now,
+            'last_ws_scan_time':          _last_ws_scan_time,
+            'trigger':                    trigger,
             'expiry_date':                expiry_dates[0] if expiry_dates else '',
             'expiry_dates':               expiry_dates,
             'positions_held':             n_positions,

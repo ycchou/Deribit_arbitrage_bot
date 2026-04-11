@@ -64,7 +64,7 @@ def main() -> None:
     # ── 事件驅動：每次收到 BTC-PERPETUAL ticker 就觸發掃描 ─────────────────────
     def on_ticker(instrument: str) -> None:
         if instrument == 'BTC-PERPETUAL':
-            run_scan(ws_client, trader, pos_manager)
+            run_scan(ws_client, trader, pos_manager, trigger='ws')
 
     ws_client.set_on_ticker_update(on_ticker)
     logger.info('🎯 事件驅動模式已啟動，等待市場數據...')
