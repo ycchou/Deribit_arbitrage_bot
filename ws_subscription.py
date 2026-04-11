@@ -33,6 +33,22 @@ class WsSubscriptionMixin:
         self.pending_subscriptions: set      = set()
         self._user_order_callbacks: Dict[str, Callable] = {}
 
+    # ── 分批訂閱輔助 ────────────────────────────────────────────────────────────
+
+    async def _subscribe_channels_batched(self, channels: List[str],
+                                           batch_size: int = 20,
+                                           delay: float = 0.2) -> bool:
+        """分批訂閱，每批最多 batch_size 個 channel，批次間等待 delay 秒。"""
+        all_ok = True
+        for i in range(0, len(channels), batch_size):
+            batch = channels[i:i + batch_size]
+            ok = await self._subscribe_channels(batch)
+            if not ok:
+                all_ok = False
+            if i + batch_size < len(channels):
+                await asyncio.sleep(delay)
+        return all_ok
+
     # ── 公開訂閱介面 ────────────────────────────────────────────────────────────
 
     def subscribe_instruments(self, instruments: List[str]) -> bool:
@@ -48,10 +64,13 @@ class WsSubscriptionMixin:
 
         if self.is_connected and self.loop:
             future = asyncio.run_coroutine_threadsafe(
-                self._subscribe_channels(channels), self.loop
+                self._subscribe_channels_batched(channels), self.loop
             )
             try:
-                result = future.result(timeout=5)
+                # timeout 依 batch 數量動態計算：每批 3 秒 + 底線 5 秒
+                n_batches = (len(channels) + 19) // 20
+                timeout = 5 + n_batches * 3
+                result = future.result(timeout=timeout)
                 if result:
                     with self._sub_lock:
                         self.subscribed_instruments.update(new_instruments)
@@ -104,7 +123,7 @@ class WsSubscriptionMixin:
         if not pending:
             return
 
-        success = await self._subscribe_channels(pending)
+        success = await self._subscribe_channels_batched(pending)
         if success:
             with self._sub_lock:
                 for ch in pending:
