@@ -102,11 +102,18 @@ def run_scan(ws_client, trader, pos_manager, trigger: str = 'fallback') -> None:
         if not global_state.should_scan():
             return
 
-        # ── Fix #8: 下單失敗短暫冷卻 ──────────────────────────────────────────
+        # ── Fix #8: 下單失敗短暫冷卻（連線失敗用短冷卻，交易所拒絕用長冷卻）───
         failure_elapsed = time.time() - global_state.last_failure_time
-        if failure_elapsed < Config.FAILURE_COOLDOWN_SECONDS:
-            remaining_sec = Config.FAILURE_COOLDOWN_SECONDS - failure_elapsed
-            logger.info(f"⚠️ 失敗冷卻中，剩餘 {remaining_sec:.0f}s")
+        cooldown_secs = (Config.CONNECTION_FAILURE_COOLDOWN_SECONDS
+                         if global_state.last_failure_type == 'connection'
+                         else Config.FAILURE_COOLDOWN_SECONDS)
+        if failure_elapsed < cooldown_secs:
+            remaining_sec = cooldown_secs - failure_elapsed
+            # 只在首次進入和每 10 秒時打 log，避免每 50ms 刷一次
+            if not hasattr(run_scan, '_cooldown_last_log') \
+                    or time.time() - run_scan._cooldown_last_log >= 10:
+                logger.info(f"⚠️ 失敗冷卻中 ({global_state.last_failure_type})，剩餘 {remaining_sec:.0f}s")
+                run_scan._cooldown_last_log = time.time()
             bot_state.update_scan_info({
                 'status':                'cooling_down',
                 'cooldown_remaining_min': round(remaining_sec / 60, 2),

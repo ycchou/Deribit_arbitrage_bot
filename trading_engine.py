@@ -240,7 +240,10 @@ def perform_final_check_and_execute(
             logger.error(f'❌ 成交通知發送失敗: {e}', exc_info=True)
         return True
 
-    # Fix #8: 記錄下單失敗時間，進入短暫冷卻
+    # Fix #8: 記錄下單失敗時間 + 類型，進入短暫冷卻
     global_state.last_failure_time = time.time()
-    logger.error("❌ 交易執行失敗")
+    failure_type = (result.get('failure_type', 'exchange')
+                    if isinstance(result, dict) else 'exchange')
+    global_state.last_failure_type = failure_type
+    logger.error(f"❌ 交易執行失敗 (type={failure_type})")
     return False

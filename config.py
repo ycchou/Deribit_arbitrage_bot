@@ -78,6 +78,8 @@ class Config:
 
     # ── 風險控制 ─────────────────────────────────────────────────────────────────
     FAILURE_COOLDOWN_SECONDS    = 60   # 下單失敗後 1 分鐘冷卻，避免連續重試
+    CONNECTION_FAILURE_COOLDOWN_SECONDS = 15  # WS 連線問題冷卻（短，重連後快速恢復）
+    PRETRADE_PING_ENABLED       = True  # 下單前 WS 健康預檢；關閉可減少延遲，但風險自負
     ENTRY_FILL_TIMEOUT_SECONDS  = 10   # 等待三條腿成交的最長秒數
 
     # ── Live Server ─────────────────────────────────────────────────────────────
@@ -101,6 +103,7 @@ class Config:
         'position_close_trigger':  ('POSITION_CLOSE_TRIGGER_SECONDS', int),
         'taker_force_close':       ('TAKER_FORCE_CLOSE_SECONDS',    int),
         'scan_interval':           ('SCAN_INTERVAL_SECONDS',        int),
+        'pretrade_ping_enabled':   ('PRETRADE_PING_ENABLED',        lambda v: v if isinstance(v, bool) else str(v).lower() == 'true'),
     }
 
     @classmethod
@@ -144,4 +147,5 @@ class Config:
             "position_close_trigger": cls.POSITION_CLOSE_TRIGGER_SECONDS,
             "taker_force_close": cls.TAKER_FORCE_CLOSE_SECONDS,
             "use_testnet": cls.USE_TESTNET,
+            "pretrade_ping_enabled": cls.PRETRADE_PING_ENABLED,
         }

@@ -41,14 +41,22 @@ class DeribitTrader:
         )
 
         # P0-2: 下單前 WebSocket 健康預檢（防殭屍連線）
-        # 若 WS 表面連著但實際收不到 server 回應，直接放棄本次機會，
-        # 避免 3 腿下單都 timeout、無法驗證是否有幽靈倉位的慘況。
-        if not self.ws.ping_ws(timeout=1.0):
-            logger.error(
-                "🛑 WS 健康預檢失敗（public/test 無回應）— 疑似殭屍連線，放棄本次機會"
+        # 可透過 Config.PRETRADE_PING_ENABLED 控制開關（預設開啟）。
+        # 開啟時：預檢失敗會先嘗試強制重連，重連成功則繼續執行交易。
+        # 關閉時：省略 ~50-150ms 延遲，改依賴心跳偵測（10s 週期）。
+        if Config.PRETRADE_PING_ENABLED and not self.ws.ping_ws(timeout=1.0):
+            logger.warning(
+                "🛑 WS 健康預檢失敗（public/test 無回應）— 嘗試強制重連..."
             )
-            # 不發執行失敗通知、不走緊急平倉：因為根本沒送單，完全安全
-            return None
+            if self._force_reconnect_ws(timeout=10.0):
+                if self.ws.ping_ws(timeout=1.0):
+                    logger.info("✅ 重連後預檢通過，繼續執行交易")
+                else:
+                    logger.error("❌ 重連後預檢仍失敗，放棄本次機會")
+                    return {'success': False, 'failure_type': 'connection'}
+            else:
+                logger.error("❌ WS 強制重連失敗，放棄本次機會")
+                return {'success': False, 'failure_type': 'connection'}
 
         # 重複開倉檢查已由 scan_orchestrator 在交易鎖內完成（pos_manager 記憶體檢查，微秒級）
         # 移除原本的 Deribit RPC 倉位預查（2x RPC ≈ 780ms），大幅縮短延遲
@@ -127,7 +135,7 @@ class DeribitTrader:
                 )
                 self._emergency_close_legs(actually_filled)
             send_execution_failed_notification(strategy, fail_reason)
-            return None
+            return {'success': False, 'failure_type': fail_reason}
 
         # ── 步驟 2：等待三條腿全部成交 ────────────────────────────────────────
         logger.info(
@@ -147,7 +155,7 @@ class DeribitTrader:
                 logger.warning(f"🚨 緊急平倉 {len(filled)} 條已成交腿，避免裸倉...")
                 self._emergency_close_legs(filled)
             send_execution_failed_notification(strategy, 'timeout')
-            return None
+            return {'success': False, 'failure_type': 'exchange'}
 
         logger.info("✅✅✅ 三條腿全部成交確認")
         for o in placed:

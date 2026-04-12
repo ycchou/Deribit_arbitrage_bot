@@ -17,6 +17,7 @@ class GlobalState:
         self.current_instruments: set  = set()
         self.last_expiry_date: str     = None
         self.last_failure_time: float  = 0.0
+        self.last_failure_type: str    = ''   # 'connection' | 'exchange' | 'rpc_timeout'
 
         # 節流：避免同一時間連發多次掃描（最快 50ms 一次）
         self._last_scan_time: float    = 0.0
