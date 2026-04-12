@@ -741,6 +741,7 @@ const S = {
   scanInfo: {}, activePos: null, activePositions: [],
   trades: [],
   system: {},
+  config: {},
   priceHistory: [],   // { t, v } last 80 BTC prices for sparkline
   lastDataAt: 0,      // 前端收到任何 Server 資料的時間（ms）
   tradingEnabled: false,
@@ -1323,7 +1324,7 @@ function renderKpis() {
 }
 
 function renderNextTrade() {
-  const MAX_POS  = 8;
+  const MAX_POS  = S.config.max_concurrent_positions ?? 8;
   const posCount = S.scanInfo.position_count ?? S.activePositions.length;
   const cooldown = S.scanInfo.trade_cooldown_remaining_sec ?? 0;
   const posStr   = `部位 ${posCount}/${MAX_POS}`;
@@ -1480,6 +1481,7 @@ function handle(msg) {
       S.trades         = msg.trade_history || [];
       S.system         = msg.system || {};
       S.tradingEnabled = !!msg.trading_enabled;
+      if (msg.config) S.config = msg.config;
 
       renderBtc(S.btcPrice);
       renderFunding(S.fundingRate);
