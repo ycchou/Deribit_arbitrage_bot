@@ -225,7 +225,7 @@ class DeribitTrader:
                             'avg_price': data.get('average_price', 0.0),
                         }
                     return
-                time.sleep(0.05)
+                time.sleep(0.02)
             with lock:
                 results[order_id] = {'state': 'timeout', 'avg_price': 0.0}
 

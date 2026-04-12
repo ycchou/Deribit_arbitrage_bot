@@ -1249,7 +1249,7 @@ function renderPosCard(pos) {
     <div style="margin:8px 0 4px;font-size:10px;color:var(--muted);letter-spacing:1px">── 損益分析 ──</div>
     <div style="display:grid;grid-template-columns:1fr auto;gap:1px 8px;font-size:11px;line-height:1.7">
       <span style="color:var(--muted)">毛利</span>
-      <span style="font-family:monospace;text-align:right;color:var(--fg)">$${(+pos.gross_profit).toFixed(2)}</span>
+      <span style="font-family:monospace;text-align:right;color:var(--fg)">${(+pos.gross_profit) >= 0 ? '' : '-'}$${Math.abs(+pos.gross_profit).toFixed(2)}</span>
       <span style="color:var(--muted)">Call 手續費</span>
       <span style="font-family:monospace;text-align:right;color:var(--red)">-$${(+(pos.call_fee||0)).toFixed(2)}</span>
       <span style="color:var(--muted)">Put 手續費</span>
@@ -1261,10 +1261,10 @@ function renderPosCard(pos) {
       <span style="color:var(--muted)">資金費率(估)</span>
       <span style="font-family:monospace;text-align:right;color:${fundingColor}">${fundingSign}$${(+pos.funding_cost).toFixed(2)}&nbsp;<span style="font-size:9px">${esc(pos.funding_direction||'')}</span></span>
       <span style="color:var(--muted);border-top:1px solid var(--border);padding-top:3px">預估淨利</span>
-      <span style="font-family:monospace;text-align:right;font-weight:700;font-size:12px;color:${netColor};border-top:1px solid var(--border);padding-top:3px">${netProfit >= 0 ? '+' : ''}$${netProfit.toFixed(2)}</span>
+      <span style="font-family:monospace;text-align:right;font-weight:700;font-size:12px;color:${netColor};border-top:1px solid var(--border);padding-top:3px">${netProfit >= 0 ? '+' : '-'}$${Math.abs(netProfit).toFixed(2)}</span>
     </div>` : `
     <div class="kv2" style="margin-top:6px">
-      ${netProfit !== 0 ? `<div class="kv-item"><div class="kv-label">預估淨利</div><div class="kv-val" style="color:${netColor};font-weight:700">$${netProfit.toFixed(2)}</div></div>` : ''}
+      ${netProfit !== 0 ? `<div class="kv-item"><div class="kv-label">預估淨利</div><div class="kv-val" style="color:${netColor};font-weight:700">${netProfit >= 0 ? '+' : '-'}$${Math.abs(netProfit).toFixed(2)}</div></div>` : ''}
     </div>`;
 
   return `
@@ -1313,9 +1313,9 @@ function renderKpis() {
   const wins      = profits.filter(p => p > 0).length;
   const winRate   = (wins / count * 100).toFixed(1);
 
-  $('kpi-pnl').textContent = (total >= 0 ? '+' : '') + '$' + Math.abs(total).toFixed(2);
+  $('kpi-pnl').textContent = (total >= 0 ? '+' : '-') + '$' + Math.abs(total).toFixed(2);
   $('kpi-pnl').className   = 'metric-val ' + (total >= 0 ? 'c-green' : 'c-red');
-  $('kpi-pnl-sub').textContent = '每筆平均 $' + (total/count).toFixed(2);
+  $('kpi-pnl-sub').textContent = '每筆平均 ' + (total/count >= 0 ? '+' : '-') + '$' + Math.abs(total/count).toFixed(2);
 
   $('kpi-winrate').textContent = winRate + '%';
   $('kpi-winrate').className   = 'metric-val ' + (parseFloat(winRate) >= 50 ? 'c-green' : 'c-red');
@@ -1374,9 +1374,9 @@ function renderTrades() {
   const total   = profits.reduce((a,b)=>a+b,0);
   const avg     = total / profits.length;
   $('sum-count').textContent = S.trades.length;
-  $('sum-pnl').textContent = (total>=0?'+':'') + '$' + Math.abs(total).toFixed(2);
+  $('sum-pnl').textContent = (total>=0?'+':'-') + '$' + Math.abs(total).toFixed(2);
   $('sum-pnl').style.color = total >= 0 ? 'var(--green)' : 'var(--red)';
-  $('sum-avg').textContent = (avg>=0?'+':'') + '$' + Math.abs(avg).toFixed(2);
+  $('sum-avg').textContent = (avg>=0?'+':'-') + '$' + Math.abs(avg).toFixed(2);
 
   const closeMethodMap = { maker: '✅ Maker', taker: '⚡ 市價', expired: '📅 緊急' };
   const rows = [...S.trades].reverse().map(t => {
@@ -1394,7 +1394,7 @@ function renderTrades() {
       <td>${t.strike ? fmtPrice(t.strike) : '—'}</td>
       <td>${t.expiryDate ? esc(t.expiryDate) : '—'}</td>
       <td style="font-size:11px">${cm}</td>
-      <td style="color:${pColor};font-weight:600">${(p>=0?'+':'') + '$' + Math.abs(p).toFixed(2)}</td>
+      <td style="color:${pColor};font-weight:600">${(p>=0?'+':'-') + '$' + Math.abs(p).toFixed(2)}</td>
     </tr>`;
   }).join('');
 

@@ -59,7 +59,7 @@ class Config:
     # ── 交易與風險控制 ──────────────────────────────────────────────────────────
     TRADE_AMOUNT_BTC         = 0.3  # 單次交易單位
     MAX_CONCURRENT_POSITIONS = 8    # 同時最多持倉組數
-    TRADE_COOLDOWN_SECONDS   = 60   # 組間冷卻（秒）
+    TRADE_COOLDOWN_SECONDS   = 30   # 組間冷卻（秒）
 
     # 掃描範圍：ATM 前後各幾檔 strike（1 = ±1，2 = ±2，4 = ±4）
     STRIKE_SCAN_RANGE        = 4
@@ -78,7 +78,7 @@ class Config:
 
     # ── 風險控制 ─────────────────────────────────────────────────────────────────
     FAILURE_COOLDOWN_SECONDS    = 60   # 下單失敗後 1 分鐘冷卻，避免連續重試
-    CONNECTION_FAILURE_COOLDOWN_SECONDS = 15  # WS 連線問題冷卻（短，重連後快速恢復）
+    CONNECTION_FAILURE_COOLDOWN_SECONDS = 5   # WS 連線問題冷卻（短，重連後快速恢復）
     PRETRADE_PING_ENABLED       = True  # 下單前 WS 健康預檢；關閉可減少延遲，但風險自負
     ENTRY_FILL_TIMEOUT_SECONDS  = 10   # 等待三條腿成交的最長秒數
 
