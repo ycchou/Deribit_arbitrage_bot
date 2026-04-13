@@ -34,7 +34,7 @@ class Config:
     TELEGRAM_CHAT_ID      = _secrets["telegram"]["chat_id"]
 
     # ── 環境切換 ────────────────────────────────────────────────────────────────
-    USE_TESTNET = True   # True = testnet，False = 正式網
+    USE_TESTNET = False   # True = testnet，False = 正式網
 
     # ── Deribit API 端點（自動依 USE_TESTNET 切換）──────────────────────────────
     DERIBIT_BASE_URL = (
