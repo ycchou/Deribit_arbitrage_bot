@@ -995,10 +995,15 @@ function renderConfig(cfg) {
 
   // env badge (always read-only)
   const envEl = $('cfg-env');
+  const netBadge = $('net-badge');
   if (cfg.use_testnet) {
     envEl.innerHTML = '<span class="pill pill-orange" style="font-size:11px;padding:2px 8px;">TESTNET</span>';
+    netBadge.textContent = 'TESTNET';
+    netBadge.className = 'badge badge-testnet';
   } else {
-    envEl.innerHTML = '<span class="pill pill-green" style="font-size:11px;padding:2px 8px;">LIVE</span>';
+    envEl.innerHTML = '<span class="pill pill-green" style="font-size:11px;padding:2px 8px;">MAINNET</span>';
+    netBadge.textContent = 'MAINNET';
+    netBadge.className = 'badge badge-live';
   }
 
   // editable fields
