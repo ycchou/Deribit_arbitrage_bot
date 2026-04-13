@@ -77,7 +77,7 @@ class WsSubscriptionMixin:
                 return result
             except Exception as e:
                 err_msg = str(e) or type(e).__name__
-                logger.error(f'❌ 訂閱失敗: {err_msg}，放入 pending 等待重試')
+                logger.warning(f'⚠️ 訂閱逾時: {err_msg}，放入 pending 下次重試')
                 future.cancel()
                 with self._sub_lock:
                     self.pending_subscriptions.update(channels)
