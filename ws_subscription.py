@@ -52,7 +52,7 @@ class WsSubscriptionMixin:
     # ── 公開訂閱介面 ────────────────────────────────────────────────────────────
 
     def subscribe_instruments(self, instruments: List[str]) -> bool:
-        """訂閱合約 ticker（smart：只訂閱尚未訂閱的）。"""
+        """訂閱合約 ticker（非阻塞：送出後立即返回，由 wait_for_data 驗證結果）。"""
         with self._sub_lock:
             new_instruments = [i for i in instruments
                                if i not in self.subscribed_instruments]
@@ -63,25 +63,14 @@ class WsSubscriptionMixin:
         channels = [f'ticker.{i}.raw' for i in new_instruments]
 
         if self.is_connected and self.loop:
-            future = asyncio.run_coroutine_threadsafe(
+            asyncio.run_coroutine_threadsafe(
                 self._subscribe_channels_batched(channels), self.loop
             )
-            try:
-                # timeout 依 batch 數量動態計算：每批 3 秒 + 底線 5 秒
-                n_batches = (len(channels) + 19) // 20
-                timeout = 5 + n_batches * 3
-                result = future.result(timeout=timeout)
-                if result:
-                    with self._sub_lock:
-                        self.subscribed_instruments.update(new_instruments)
-                return result
-            except Exception as e:
-                err_msg = str(e) or type(e).__name__
-                logger.warning(f'⚠️ 訂閱逾時: {err_msg}，放入 pending 下次重試')
-                future.cancel()
-                with self._sub_lock:
-                    self.pending_subscriptions.update(channels)
-                return False
+            # 樂觀標記為已訂閱，避免重複送出 coroutine 造成堆積
+            # scan_orchestrator 會用 wait_for_data 驗證，失敗時清除標記重試
+            with self._sub_lock:
+                self.subscribed_instruments.update(new_instruments)
+            return True
         else:
             with self._sub_lock:
                 self.pending_subscriptions.update(channels)
