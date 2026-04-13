@@ -160,14 +160,15 @@ def run_scan(ws_client, trader, pos_manager, trigger: str = 'fallback') -> None:
         instruments_set = set(all_instruments_needed) | {'BTC-PERPETUAL'}
         if instruments_set != global_state.current_instruments:
             ws_client.subscribe_instruments(all_instruments_needed)
-            if ws_client.wait_for_data(all_instruments_needed, timeout=5):
+            if ws_client.wait_for_data(all_instruments_needed, timeout=8):
                 global_state.current_instruments = instruments_set
             else:
-                # 數據未到，清除樂觀訂閱標記以允許下次重試
-                with ws_client._sub_lock:
-                    for inst in all_instruments_needed:
-                        ws_client.subscribed_instruments.discard(inst)
-                logger.warning('⚠️ 部分數據未就緒，下次掃描重試')
+                # 訂閱已送出，標記為當前集合（避免每次重複訂閱造成風暴）
+                # 數據稀疏時（如測試網）仍可用已到的數據繼續掃描
+                global_state.current_instruments = instruments_set
+                with ws_client.data_lock:
+                    ready = [i for i in all_instruments_needed if i in ws_client.ticker_data]
+                logger.info(f'📡 訂閱已送出，{len(ready)}/{len(all_instruments_needed)} 個合約有數據，繼續掃描')
 
         # ── 掃描所有到期日 × 履約價 ─────────────────────────────────────────
         all_opportunities: List[Dict] = []

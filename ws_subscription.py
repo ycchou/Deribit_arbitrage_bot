@@ -133,14 +133,17 @@ class WsSubscriptionMixin:
             private = [c for c in channels if     c.startswith('user.')]
 
             if public:
+                msg_id = self._next_id()
                 await self.ws.send(json.dumps({
-                    'jsonrpc': '2.0', 'id': self._next_id(),
+                    'jsonrpc': '2.0', 'id': msg_id,
                     'method': 'public/subscribe',
                     'params': {'channels': public},
                 }))
+                logger.debug(f'📤 public/subscribe 已送出 (id={msg_id}, {len(public)} channels)')
             if private and self.is_authenticated:
+                msg_id = self._next_id()
                 await self.ws.send(json.dumps({
-                    'jsonrpc': '2.0', 'id': self._next_id(),
+                    'jsonrpc': '2.0', 'id': msg_id,
                     'method': 'private/subscribe',
                     'params': {'channels': private},
                 }))

@@ -53,7 +53,14 @@ class WsMessageHandlerMixin:
         # 一般 RPC Future
         with self._pending_lock:
             fut = self._pending_requests.pop(msg_id, None)
-        if fut and not fut.done():
+        if not fut:
+            # 無 Future 的 RPC 回應（如 subscribe）：記錄結果供除錯
+            if 'error' in data:
+                logger.warning(f'⚠️ RPC 回應 id={msg_id} 錯誤: {data["error"]}')
+            elif 'result' in data and isinstance(data['result'], list):
+                logger.debug(f'📥 RPC id={msg_id} 成功: {len(data["result"])} channels')
+            return
+        if not fut.done():
             if 'error' in data:
                 err = data['error']
                 if isinstance(err, dict):
