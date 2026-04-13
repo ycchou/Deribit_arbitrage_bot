@@ -118,6 +118,7 @@ class DeribitTrader:
                     rejected_legs.append({
                         'instrument': leg['name'],
                         'direction':  leg['direction'],
+                        'error':      str(err),
                     })
 
         if leg_failed:
@@ -134,7 +135,8 @@ class DeribitTrader:
                     f"🚨 發現 {len(actually_filled)} 條腿已成交，緊急平倉..."
                 )
                 self._emergency_close_legs(actually_filled)
-            send_execution_failed_notification(strategy, fail_reason)
+            reject_errors = [f"{l['instrument']}: {l['error']}" for l in rejected_legs if l.get('error')]
+            send_execution_failed_notification(strategy, fail_reason, reject_errors or None)
             return {'success': False, 'failure_type': fail_reason}
 
         # ── 步驟 2：等待三條腿全部成交 ────────────────────────────────────────

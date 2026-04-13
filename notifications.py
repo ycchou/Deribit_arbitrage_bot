@@ -402,7 +402,7 @@ _偵測時間: {timestamp}_
 
 # ── B3: 執行失敗通知 ─────────────────────────────────────────────────────────────
 
-def send_execution_failed_notification(strategy: dict, reason: str) -> bool:
+def send_execution_failed_notification(strategy: dict, reason: str, reject_errors: list = None) -> bool:
     """三腿下單後因超時、API 拒絕或 RPC 無回應而失敗時，發送 Telegram 通知。"""
     timestamp = _now_tw().strftime('%Y-%m-%d %H:%M:%S') + ' UTC+8'
     reason_label = {
@@ -432,7 +432,7 @@ def send_execution_failed_notification(strategy: dict, reason: str) -> bool:
 *到期日*: {strategy.get('expiryDate', 'N/A')}
 *預估淨利*: `${strategy.get('netProfit', 0):.2f}`
 
-*失敗原因*: {reason_label}{extra_warning}
+*失敗原因*: {reason_label}{"".join(f"\n  • `{e}`" for e in (reject_errors or []))}{extra_warning}
 
 _時間: {timestamp}_
 """.strip()
