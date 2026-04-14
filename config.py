@@ -50,7 +50,7 @@ class Config:
 
     # ── WebSocket 設定 ──────────────────────────────────────────────────────────
     WS_HEARTBEAT_INTERVAL = 10
-    WS_RECONNECT_DELAY    = 5
+    WS_RECONNECT_DELAY    = 1
 
     # ── 緩存設定 ────────────────────────────────────────────────────────────────
     FUNDING_RATE_CACHE_SECONDS = 3600  # 資金費率緩存 60 分鐘
